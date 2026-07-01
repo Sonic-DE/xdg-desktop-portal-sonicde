@@ -191,6 +191,7 @@ std::pair<PortalResponse::Response, QVariantMap> continueStart(RemoteDesktopSess
                 {u"clipboardEnabled"_s, session->clipboardEnabled()}}};
         results.insert(u"restore_data"_s, QVariant::fromValue<RestoreData>(restoreData));
     }
+    session->showStatusNotifier();
     return {PortalResponse::Success, results};
 }
 
@@ -394,7 +395,7 @@ RemoteDesktopSession* RemoteDesktopPortal::validSession(const QDBusObjectPath& h
 }
 
 RemoteDesktopSession::RemoteDesktopSession(QObject* parent, const QString& appId, const QString& path, X11Controller* controller)
-    : ScreenCastSession(parent, appId, path, QStringLiteral("krfb"), controller)
+    : ScreenCastSession(parent, appId, path, controller)
     , m_screenSharingEnabled(false)
     , m_clipboardEnabled(false)
 {
@@ -447,8 +448,11 @@ void RemoteDesktopSession::acquireStreamingInput()
     m_acquired = true;
 }
 
-void RemoteDesktopSession::refreshDescription()
+void RemoteDesktopSession::setupStatusNotifier()
 {
+    m_item->setIconByName(u"krfb"_s);
+    m_item->setTitle(i18nc("SNI title that indicates there's a process remotely controlling the system", "Remote Control"));
+    m_item->setToolTipTitle(m_item->title());
     m_item->setToolTipSubTitle(RemoteDesktopDialog::buildNotificationDescription(m_appId, deviceTypes(), screenSharingEnabled()));
 }
 

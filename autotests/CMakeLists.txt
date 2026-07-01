@@ -66,6 +66,23 @@ foreach(_test IN LISTS _x11_unit_tests)
     set_tests_properties(${_test} PROPERTIES LABELS "unit")
 endforeach()
 
+add_executable(screencastsessiontest screencastsessiontest.cpp)
+target_include_directories(screencastsessiontest PRIVATE ${CMAKE_SOURCE_DIR}/src)
+target_link_libraries(screencastsessiontest PRIVATE
+    xdg-desktop-portal-kde-backend Qt::Test Qt::Widgets Qt::DBus KF6::StatusNotifierItem PkgConfig::PIPEWIRE
+)
+find_program(DBUS_RUN_SESSION_EXECUTABLE dbus-run-session)
+if(DBUS_RUN_SESSION_EXECUTABLE)
+    add_test(NAME screencastsessiontest
+        COMMAND ${DBUS_RUN_SESSION_EXECUTABLE} -- $<TARGET_FILE:screencastsessiontest>
+    )
+    set_tests_properties(screencastsessiontest PROPERTIES
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
+        LABELS "unit"
+        TIMEOUT 30
+    )
+endif()
+
 set_tests_properties(usbportaltest PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=xcb;QML_IMPORT_PATH=$<TARGET_FILE_DIR:usbportaltest>;QML2_IMPORT_PATH=$<TARGET_FILE_DIR:usbportaltest>"
 )
