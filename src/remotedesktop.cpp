@@ -449,9 +449,7 @@ void RemoteDesktopSession::acquireStreamingInput()
 
 void RemoteDesktopSession::refreshDescription()
 {
-    QObject* item = m_item;
-    Q_UNUSED(item);
-    setDescription(RemoteDesktopDialog::buildNotificationDescription(m_appId, deviceTypes(), screenSharingEnabled()));
+    m_item->setToolTipSubTitle(RemoteDesktopDialog::buildNotificationDescription(m_appId, deviceTypes(), screenSharingEnabled()));
 }
 
 #include "moc_remotedesktop.cpp"
