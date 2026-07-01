@@ -159,7 +159,7 @@ uint ScreenCastPortal::CreateSession(const QDBusObjectPath& handle,
     qCDebug(XdgDesktopPortalKdeScreenCast) << "    app_id: " << app_id;
     qCDebug(XdgDesktopPortalKdeScreenCast) << "    options: " << options;
 
-    Session* session = new ScreenCastSession(this, app_id, session_handle.path(), QStringLiteral("media-record"), m_controller);
+    Session* session = new ScreenCastSession(this, app_id, session_handle.path(), m_controller);
 
     if (!session->isValid()) {
         delete session;
@@ -313,6 +313,7 @@ std::pair<PortalResponse::Response, QVariantMap> continueStartAfterDialog(Screen
     }
 
     session->setStreams(std::move(streams));
+    session->showStatusNotifier();
 
     QVariantMap results;
     QList<std::pair<uint, QVariantMap>> dbusResultForStreams;
@@ -454,22 +455,19 @@ void ScreenCastPortal::Start(const QDBusObjectPath& handle,
     });
 }
 
-ScreenCastSession::ScreenCastSession(QObject* parent, const QString& appId, const QString& path, const QString& iconName, X11Controller* controller)
+ScreenCastSession::ScreenCastSession(QObject* parent, const QString& appId, const QString& path, X11Controller* controller)
     : Session(parent, appId, path)
-    , m_item(new KStatusNotifierItem(this))
     , m_controller(controller)
 {
-    m_item->setStandardActionsEnabled(false);
-    m_item->setIconByName(iconName);
-
-    auto menu = new QMenu;
-    auto stopAction = menu->addAction(QIcon::fromTheme(QStringLiteral("process-stop")), i18nc("@action:inmenu stops screen/window sharing", "End"));
-    connect(stopAction, &QAction::triggered, this, &Session::close);
-    m_item->setContextMenu(menu);
-    m_item->setIsMenu(true);
 }
 
-ScreenCastSession::~ScreenCastSession() = default;
+ScreenCastSession::~ScreenCastSession()
+{
+    // Closing a PipeWire stream emits closed(); do not mutate m_streams while it is being destroyed.
+    for (const auto& stream : m_streams) {
+        disconnect(stream.get(), nullptr, this, nullptr);
+    }
+}
 
 bool ScreenCastSession::multipleSources() const
 {
@@ -509,35 +507,49 @@ void ScreenCastSession::setOptions(const QVariantMap& options)
     m_types = ScreenCastPortal::SourceType(static_cast<uint>(m_types) & available);
 }
 
+void ScreenCastSession::showStatusNotifier()
+{
+    if (m_item || (type() == Session::ScreenCast && m_streams.empty())) {
+        return;
+    }
+    m_item = std::make_unique<KStatusNotifierItem>();
+    m_item->setStandardActionsEnabled(false);
+    auto menu = new QMenu;
+    auto stopAction = menu->addAction(QIcon::fromTheme(QStringLiteral("process-stop")), i18nc("@action:inmenu stops screen/window sharing", "End"));
+    connect(stopAction, &QAction::triggered, this, &Session::close);
+    m_item->setContextMenu(menu);
+    m_item->setIsMenu(true);
+    setupStatusNotifier();
+    m_item->setToolTipIconByName(m_item->overlayIconName());
+    m_item->setToolTipTitle(m_item->title());
+    m_item->setStatus(KStatusNotifierItem::Active);
+}
+
+void ScreenCastSession::setupStatusNotifier()
+{
+    const bool isWindow = m_streams[0]->metaData()[QLatin1String("source_type")] == ScreenCastPortal::Window;
+    m_item->setToolTipSubTitle(i18ncp("%1 number of screens, %2 the app that receives them",
+        "Sharing contents to %2",
+        "%1 video streams to %2",
+        m_streams.size(),
+        Utils::applicationName(m_appId)));
+    m_item->setTitle(i18nc("SNI title that indicates there's a process seeing our windows or screens", "Screen casting"));
+    if (isWindow) {
+        m_item->setOverlayIconByName(QStringLiteral("window"));
+    } else {
+        m_item->setOverlayIconByName(QStringLiteral("monitor"));
+    }
+    m_item->setIconByName(u"media-record"_s);
+}
+
 void ScreenCastSession::setStreams(std::vector<std::unique_ptr<ScreencastingStream>>&& streams)
 {
     Q_ASSERT(!streams.empty());
     m_streams = std::move(streams);
 
-    m_item->setStandardActionsEnabled(false);
-    if (qobject_cast<RemoteDesktopSession*>(this)) {
-        refreshDescription();
-    } else {
-        const bool isWindow = m_streams[0]->metaData()[QLatin1String("source_type")] == ScreenCastPortal::Window;
-        m_item->setToolTipSubTitle(i18ncp("%1 number of screens, %2 the app that receives them",
-            "Sharing contents to %2",
-            "%1 video streams to %2",
-            m_streams.size(),
-            Utils::applicationName(m_appId)));
-        m_item->setTitle(i18nc("SNI title that indicates there's a process seeing our windows or screens", "Screen casting"));
-        if (isWindow) {
-            m_item->setOverlayIconByName(QStringLiteral("window"));
-        } else {
-            m_item->setOverlayIconByName(QStringLiteral("monitor"));
-        }
-    }
-    m_item->setToolTipIconByName(m_item->overlayIconName());
-    m_item->setToolTipTitle(m_item->title());
-
     for (const auto& s : m_streams) {
         connect(s.get(), &ScreencastingStream::closed, this, &ScreenCastSession::streamClosed);
     }
-    m_item->setStatus(KStatusNotifierItem::Active);
 }
 
 void ScreenCastSession::streamClosed()
