@@ -11,6 +11,7 @@
 
 #include <QDBusContext>
 #include <QObject>
+#include <QString>
 
 class AccessPortal;
 class AccountPortal;
@@ -25,12 +26,24 @@ class SettingsPortal;
 class ScreenCastPortal;
 class RemoteDesktopPortal;
 class DynamicLauncherPortal;
+class UsbPortal;
+class WallpaperPortal;
+class GlobalShortcutsPortal;
+class InputCapturePortal;
+class ClipboardPortal;
+class PortalBootstrap;
+class ScreenSelectionProvider;
 
 class DesktopPortal : public QObject, public QDBusContext
 {
     Q_OBJECT
 public:
-    explicit DesktopPortal(QObject *parent = nullptr);
+    explicit DesktopPortal(PortalBootstrap* bootstrap, const QString& serviceName, QObject* parent = nullptr, ScreenSelectionProvider* selectionProvider = nullptr);
+
+    QString serviceName() const
+    {
+        return m_serviceName;
+    }
 
 private:
     AccessPortal *const m_access;
@@ -46,6 +59,13 @@ private:
     ScreenCastPortal *m_screenCast = nullptr;
     RemoteDesktopPortal *m_remoteDesktop = nullptr;
     DynamicLauncherPortal *const m_dynamicLauncher;
+    UsbPortal* const m_usb;
+    WallpaperPortal* m_wallpaper = nullptr;
+    GlobalShortcutsPortal* m_globalShortcuts = nullptr;
+    InputCapturePortal* m_inputCapture = nullptr;
+    ClipboardPortal* m_clipboard = nullptr;
+    QString m_serviceName;
+    ScreenSelectionProvider* m_selectionProvider = nullptr;
 };
 
 #endif // XDG_DESKTOP_PORTAL_KDE_DESKTOP_PORTAL_H

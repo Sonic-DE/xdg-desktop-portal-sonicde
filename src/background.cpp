@@ -9,7 +9,7 @@
 #include "background_debug.h"
 #include "dbushelpers.h"
 #include "ksharedconfig.h"
-#include "waylandintegration.h"
+#include "x11/x11controller.h"
 
 #include <QDBusConnection>
 #include <QDBusMessage>
@@ -18,8 +18,6 @@
 #include <QDir>
 #include <QFile>
 #include <QMessageBox>
-#include <QPushButton>
-#include <QSettings>
 #include <QStandardPaths>
 
 #include <KConfigGroup>
@@ -29,37 +27,80 @@
 #include <KService>
 #include <KShell>
 
-#include <KWayland/Client/plasmawindowmanagement.h>
-
 using namespace Qt::StringLiterals;
 
-BackgroundPortal::BackgroundPortal(QObject *parent, QDBusContext *context)
+BackgroundPortal::BackgroundPortal(QObject* parent, QDBusContext* context, X11Controller* controller)
     : QDBusAbstractAdaptor(parent)
     , m_context(context)
+    , m_controller(controller)
 {
-    connect(WaylandIntegration::waylandIntegration(), &WaylandIntegration::WaylandIntegration::plasmaWindowManagementInitialized, this, [this]() {
-        connect(WaylandIntegration::plasmaWindowManagement(),
-                &KWayland::Client::PlasmaWindowManagement::windowCreated,
-                this,
-                [this](KWayland::Client::PlasmaWindow *window) {
-                    addWindow(window);
-                });
-
-        m_windows = WaylandIntegration::plasmaWindowManagement()->windows();
-        for (KWayland::Client::PlasmaWindow *window : std::as_const(m_windows)) {
-            addWindow(window);
-        }
-    });
+    if (m_controller) {
+        connect(m_controller, &X11Controller::windowsUpdated, this, &BackgroundPortal::setWindowDescriptors);
+        m_refreshTimer.setInterval(std::chrono::seconds(5));
+        connect(&m_refreshTimer, &QTimer::timeout, m_controller, &X11Controller::requestWindows);
+        m_refreshTimer.start();
+        m_controller->requestWindows();
+    }
 }
 
-BackgroundPortal::~BackgroundPortal()
-{
-}
+BackgroundPortal::~BackgroundPortal() = default;
 
 QVariantMap BackgroundPortal::GetAppState()
 {
     qCDebug(XdgDesktopPortalKdeBackground) << "GetAppState called: no parameters";
+    if (m_controller) {
+        m_controller->requestWindows();
+    }
     return m_appStates;
+}
+
+QVariantMap BackgroundPortal::appStatesFromWindows(const QList<X11Types::WindowDescriptor>& windows, const QString& activeAppId)
+{
+    QVariantMap appStates;
+    for (const X11Types::WindowDescriptor& window : windows) {
+        if (!window.mapped || window.skipTaskbar || window.skipSwitcher) {
+            continue;
+        }
+
+        QString appId = window.appId.trimmed();
+        if (appId.isEmpty()) {
+            appId = window.wmClass.trimmed();
+        }
+        if (appId.isEmpty()) {
+            continue;
+        }
+
+        const bool active = !activeAppId.isEmpty() && QString::compare(appId, activeAppId, Qt::CaseInsensitive) == 0;
+        const uint state = active ? Active : Running;
+        const uint existing = appStates.value(appId, QVariant::fromValue<uint>(Background)).toUInt();
+        appStates.insert(appId, QVariant::fromValue<uint>(qMax(existing, state)));
+    }
+    return appStates;
+}
+
+void BackgroundPortal::setWindowDescriptors(const QList<X11Types::WindowDescriptor>& windows)
+{
+    if (m_windows == windows) {
+        return;
+    }
+    m_windows = windows;
+    m_activeAppId.clear();
+    for (const auto& window : windows) {
+        if (window.active) {
+            m_activeAppId = window.appId.isEmpty() ? window.wmClass : window.appId;
+            break;
+        }
+    }
+    updateAppStates();
+}
+
+void BackgroundPortal::setActiveApplicationId(const QString& appId)
+{
+    if (m_activeAppId == appId) {
+        return;
+    }
+    m_activeAppId = appId;
+    updateAppStates();
 }
 
 uint BackgroundPortal::NotifyBackground(const QDBusObjectPath &handle, const QString &app_id, const QString &name, QVariantMap &results)
@@ -70,13 +111,6 @@ uint BackgroundPortal::NotifyBackground(const QDBusObjectPath &handle, const QSt
     qCDebug(XdgDesktopPortalKdeBackground) << "    handle: " << handle.path();
     qCDebug(XdgDesktopPortalKdeBackground) << "    app_id: " << app_id;
     qCDebug(XdgDesktopPortalKdeBackground) << "    name: " << name;
-
-    // If KWayland::Client::PlasmaWindowManagement hasn't been created, we would be notified about every
-    // application, which is not what we want. This will be mostly happening on X11 session.
-    if (!WaylandIntegration::plasmaWindowManagement()) {
-        results.insert(QStringLiteral("result"), static_cast<uint>(BackgroundPortal::AllowOnce));
-        return PortalResponse::Success;
-    }
 
     QDBusMessage message = m_context->message();
     auto allow = [message]() {
@@ -183,12 +217,12 @@ uint BackgroundPortal::NotifyBackground(const QDBusObjectPath &handle, const QSt
 
     notify->sendEvent();
 
-    Q_ASSERT(!m_backgroundAppWarned.contains(app_id));
+    m_backgroundAppWarned.insert(app_id);
     connect(notify, &KNotification::closed, this, [this, app_id] {
         m_backgroundAppWarned.remove(app_id);
     });
-    m_backgroundAppWarned.insert(app_id);
 
+    Q_UNUSED(name)
     return PortalResponse::Success;
 }
 
@@ -232,43 +266,21 @@ bool BackgroundPortal::EnableAutostart(const QString &app_id, bool enable, const
     return true;
 }
 
-QString lookUpAppId(KWayland::Client::PlasmaWindow *window)
+void BackgroundPortal::updateAppStates()
 {
-    const QString flatpakInfoPath = u"/proc/"_s + QString::number(window->pid()) + u"/root/.flatpak-info"_s;
-    const QSettings flatpakInfo(flatpakInfoPath, QSettings::IniFormat);
-    const auto appId = flatpakInfo.value("Application/name"_L1, window->appId()).toString();
-    return appId;
-}
-
-void BackgroundPortal::addWindow(KWayland::Client::PlasmaWindow *window)
-{
-    const QString appId = lookUpAppId(window);
-    window->setProperty("appId", appId);
-    const bool isActive = window->isActive();
-    m_appStates[appId] = QVariant::fromValue<uint>(isActive ? Active : Running);
-
-    connect(window, &KWayland::Client::PlasmaWindow::activeChanged, this, [this, window]() {
-        setActiveWindow(window->appId(), window->isActive());
-    });
-    connect(window, &KWayland::Client::PlasmaWindow::unmapped, this, [this, window, appId]() {
-        const auto plasmaWindows = WaylandIntegration::plasmaWindowManagement()->windows();
-        const uint windows = std::ranges::count_if(plasmaWindows, [&appId, window](KWayland::Client::PlasmaWindow *w) {
-            return w->property("appId").toString() == appId && w->uuid() != window->uuid();
-        });
-
-        if (!windows) {
-            m_appStates.remove(appId);
-            Q_EMIT RunningApplicationsChanged();
+    QVariantMap nextStates = appStatesFromWindows(m_windows, m_activeAppId);
+    if (nextStates == m_appStates) {
+        return;
+    }
+    m_appStates = nextStates;
+    m_apps.clear();
+    m_activeApps.clear();
+    for (auto it = m_appStates.cbegin(); it != m_appStates.cend(); ++it) {
+        m_apps.insert(it.key());
+        if (it.value().toUInt() == Active) {
+            m_activeApps.insert(it.key());
         }
-    });
-
-    Q_EMIT RunningApplicationsChanged();
-}
-
-void BackgroundPortal::setActiveWindow(const QString &appId, bool active)
-{
-    m_appStates[appId] = QVariant::fromValue<uint>(active ? Active : Running);
-
+    }
     Q_EMIT RunningApplicationsChanged();
 }
 

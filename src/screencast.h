@@ -4,17 +4,22 @@
  * SPDX-License-Identifier: LGPL-2.0-or-later
  *
  * SPDX-FileCopyrightText: 2018 Jan Grulich <jgrulich@redhat.com>
+ * SPDX-FileCopyrightText: 2022 Harald Sitter <sitter@kde.org>
  */
 
 #ifndef XDG_DESKTOP_PORTAL_KDE_SCREENCAST_H
 #define XDG_DESKTOP_PORTAL_KDE_SCREENCAST_H
 
+#include "screencasting.h"
+#include "session.h"
 #include <QDBusAbstractAdaptor>
 #include <QDBusObjectPath>
-#include "session.h"
-#include "waylandintegration.h"
+
+#include <KStatusNotifierItem>
 
 class QDBusMessage;
+class ScreenSelectionProvider;
+class X11Controller;
 
 class ScreenCastPortal : public QDBusAbstractAdaptor
 {
@@ -47,21 +52,15 @@ public:
     };
     Q_ENUM(PersistMode)
 
-    explicit ScreenCastPortal(QObject *parent);
+    explicit ScreenCastPortal(QObject* parent, X11Controller* controller = nullptr, ScreenSelectionProvider* selectionProvider = nullptr);
     ~ScreenCastPortal() override;
 
     uint version() const
     {
         return 4;
     }
-    uint AvailableSourceTypes() const
-    {
-        return Monitor | Window | Virtual;
-    };
-    uint AvailableCursorModes() const
-    {
-        return Hidden | Embedded | Metadata;
-    };
+    uint AvailableSourceTypes() const;
+    uint AvailableCursorModes() const;
 
 public Q_SLOTS:
     uint CreateSession(const QDBusObjectPath &handle,
@@ -84,6 +83,10 @@ public Q_SLOTS:
                const QDBusMessage &message,
                uint &replyResponse,
                QVariantMap &replyResults);
+
+private:
+    X11Controller* m_controller = nullptr;
+    ScreenSelectionProvider* m_selectionProvider = nullptr;
 };
 
 
@@ -91,7 +94,7 @@ class ScreenCastSession : public Session
 {
     Q_OBJECT
 public:
-    explicit ScreenCastSession(QObject *parent, const QString &appId, const QString &path, const QString &iconName);
+    explicit ScreenCastSession(QObject* parent, const QString& appId, const QString& path, const QString& iconName, X11Controller* controller = nullptr);
     ~ScreenCastSession() override;
 
     void setOptions(const QVariantMap &options);
@@ -130,6 +133,10 @@ public:
     virtual void refreshDescription()
     {
     }
+    X11Controller* controller() const
+    {
+        return m_controller;
+    }
 
 protected:
     void setDescription(const QString &description);
@@ -145,7 +152,8 @@ private:
     void streamClosed();
 
     std::vector<std::unique_ptr<ScreencastingStream>> m_streams;
+    X11Controller* m_controller = nullptr;
     friend class RemoteDesktopPortal;
 };
 
-#endif // XDG_DESKTOP_PORTAL_KDE_SCREENCAST_H
+#endif

@@ -12,26 +12,21 @@
 #include "outputsmodel.h"
 #include "quickdialog.h"
 #include "screencast.h"
-#include <QEventLoop>
+#include "x11/x11types.h"
+#include <QAbstractListModel>
 #include <QRect>
 
-namespace KWayland
-{
-namespace Client
-{
-class PlasmaWindow;
-}
-}
+class X11Controller;
 
 class ScreenChooserDialog : public QuickDialog
 {
     Q_OBJECT
 public:
-    ScreenChooserDialog(const QString &appName, bool multiple, ScreenCastPortal::SourceTypes types);
+    ScreenChooserDialog(const QString& appName, bool multiple, ScreenCastPortal::SourceTypes types, X11Controller* controller = nullptr);
     ~ScreenChooserDialog() override;
 
     QList<Output> selectedOutputs() const;
-    QList<KWayland::Client::PlasmaWindow *> selectedWindows() const;
+    QList<X11Types::WindowDescriptor> selectedWindows() const;
     bool allowRestore() const;
     QRect selectedRegion() const;
 
@@ -40,6 +35,7 @@ public Q_SLOTS:
 
 Q_SIGNALS:
     void clearSelection();
+    void finished(DialogResult result);
 
 private:
     void setRegion(const QRect region);

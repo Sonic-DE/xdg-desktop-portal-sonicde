@@ -45,7 +45,7 @@ Kirigami.CardsLayout {
             exclusive: false
             autoExclusive: exclusive
             checked: model.checked === Qt.Checked
-            nodeId: waylandItem.nodeId
+            nodeId: sourceItem.nodeId
             syntheticCount: {
                 let model = view.model.sourceModel
                 if (model instanceof OutputsModel) {
@@ -63,7 +63,7 @@ Kirigami.CardsLayout {
             Accessible.role: root.dialog.multiple ? Accessible.CheckBox : Accessible.Button
 
             TaskManager.ScreencastingRequest {
-                id: waylandItem
+                id: sourceItem
                 outputName: delegate.model.name
                 uuid: delegate.model.Uuid
             }

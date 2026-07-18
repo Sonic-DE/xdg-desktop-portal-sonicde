@@ -2,9 +2,6 @@
  * SPDX-FileCopyrightText: 2018 Red Hat Inc
  *
  * SPDX-License-Identifier: LGPL-2.0-or-later
- *
- * SPDX-FileCopyrightText: 2018 Jan Grulich <jgrulich@redhat.com>
- * SPDX-FileCopyrightText: 2022 Harald Sitter <sitter@kde.org>
  */
 
 #include "screenshot.h"
@@ -14,17 +11,18 @@
 #include "screenshotdialog.h"
 #include "utils.h"
 
+#include <QCursor>
 #include <QDBusArgument>
 #include <QDBusConnection>
 #include <QDBusMetaType>
-#include <QDBusReply>
 #include <QDateTime>
-#include <QPointer>
+#include <QDir>
+#include <QGuiApplication>
+#include <QScreen>
 #include <QStandardPaths>
 #include <QUrl>
 #include <QWindow>
 
-// Keep in sync with qflatpakcolordialog from Qt flatpak platform theme
 Q_DECLARE_METATYPE(ScreenshotPortal::ColorRGB)
 
 QDBusArgument &operator<<(QDBusArgument &arg, const ScreenshotPortal::ColorRGB &color)
@@ -63,19 +61,27 @@ const QDBusArgument &operator>>(const QDBusArgument &argument, QColor &color)
     argument >> rgba;
     argument.endStructure();
     color = QColor::fromRgba(rgba);
+
     return argument;
 }
 
-ScreenshotPortal::ScreenshotPortal(QObject *parent)
-    : QDBusAbstractAdaptor(parent)
+ScreenshotPortal::ScreenshotPortal(QObject* parent)
+    : ScreenshotPortal(parent, new ScreenshotCapture)
 {
+}
+
+ScreenshotPortal::ScreenshotPortal(QObject* parent, ScreenshotCapture* capture)
+    : QDBusAbstractAdaptor(parent)
+    , m_capture(capture)
+{
+    if (m_capture) {
+        m_capture->setParent(parent ? parent : this);
+    }
     qDBusRegisterMetaType<QColor>();
     qDBusRegisterMetaType<ColorRGB>();
 }
 
-ScreenshotPortal::~ScreenshotPortal()
-{
-}
+ScreenshotPortal::~ScreenshotPortal() = default;
 
 void ScreenshotPortal::Screenshot(const QDBusObjectPath &handle,
                                   const QString &app_id,
@@ -85,49 +91,57 @@ void ScreenshotPortal::Screenshot(const QDBusObjectPath &handle,
                                   uint &replyResponse,
                                   QVariantMap &replyResults)
 {
-    qCDebug(XdgDesktopPortalKdeScreenshot) << "Screenshot called with parameters:";
-    qCDebug(XdgDesktopPortalKdeScreenshot) << "    handle: " << handle.path();
-    qCDebug(XdgDesktopPortalKdeScreenshot) << "    app_id: " << app_id;
-    qCDebug(XdgDesktopPortalKdeScreenshot) << "    parent_window: " << parent_window;
-    qCDebug(XdgDesktopPortalKdeScreenshot) << "    options: " << options;
+    qCDebug(XdgDesktopPortalKdeScreenshot) << "Screenshot called";
 
-    QPointer<ScreenshotDialog> screenshotDialog = new ScreenshotDialog;
-    Utils::setParentWindow(screenshotDialog->windowHandle(), parent_window);
-    Request::makeClosableDialogRequest(handle, screenshotDialog.data());
-
-    const bool modal = options.value(QStringLiteral("modal"), true).toBool();
-    screenshotDialog->windowHandle()->setModality(modal ? Qt::WindowModal : Qt::NonModal);
+    Q_UNUSED(handle)
+    Q_UNUSED(app_id)
+    Q_UNUSED(parent_window)
 
     const bool interactive = options.value(QStringLiteral("interactive"), false).toBool();
+    const bool includeCursor = options.value(QStringLiteral("cursor"), true).toBool();
+    const bool includeDecorations = options.value(QStringLiteral("include_decorations"), true).toBool();
 
-    auto createReply = [](const QImage &screenshot) -> std::pair<PortalResponse::Response, QVariantMap> {
-        if (screenshot.isNull()) {
-            return {PortalResponse::OtherError, {}};
+    auto setResult = [this, &replyResponse, &replyResults](const QImage& image) {
+        QString uri;
+        QString error;
+        if (saveImage(image, &uri, &error)) {
+            replyResponse = PortalResponse::Success;
+            replyResults.insert(QStringLiteral("uri"), uri);
+            return;
         }
-        const QString filename = QStringLiteral("%1/Screenshot_%2.png") //
-                                     .arg(QStandardPaths::writableLocation(QStandardPaths::PicturesLocation),
-                                          QDateTime::currentDateTime().toString(QStringLiteral("yyyyMMdd_hhmmss")));
-        if (!screenshot.save(filename, "PNG")) {
-            return {PortalResponse::OtherError, {}};
-        }
-        return {PortalResponse::Success, {{QStringLiteral("uri"), QUrl::fromLocalFile(filename).toString(QUrl::FullyEncoded)}}};
+
+        qCWarning(XdgDesktopPortalKdeScreenshot) << "Failed to save screenshot:" << error;
+        replyResponse = PortalResponse::OtherError;
+        replyResults.clear();
     };
 
     if (!interactive) {
-        qDebug() << "take non interactive";
-        screenshotDialog->takeScreenshotNonInteractive();
-        std::tie(replyResponse, replyResults) = createReply(screenshotDialog->image());
-        screenshotDialog->deleteLater();
+        setResult(captureImage(false, includeCursor, includeDecorations));
         return;
     }
 
-    delayReply(message, screenshotDialog.get(), this, [screenshotDialog, createReply](DialogResult dialogResult) {
-        auto response = PortalResponse::fromDialogResult(dialogResult);
+    message.setDelayedReply(true);
+    replyResponse = PortalResponse::Success;
+    replyResults.clear();
+    auto* dialog = new ScreenshotDialog(parent());
+    Request::makeClosableDialogRequest(handle, dialog);
+    connect(dialog, &ScreenshotDialog::finished, this, [dialog, message, this](DialogResult result) {
+        uint response = PortalResponse::Cancelled;
         QVariantMap results;
-        if (dialogResult == DialogResult::Accepted) {
-            std::tie(response, results) = createReply(screenshotDialog->image());
+        if (result != DialogResult::Accepted) {
+            QDBusConnection::sessionBus().send(message.createReply({response, results}));
+            return;
         }
-        return QVariantList{response, results};
+        QString uri;
+        QString error;
+        if (saveImage(dialog->image(), &uri, &error)) {
+            response = PortalResponse::Success;
+            results.insert(QStringLiteral("uri"), uri);
+        } else {
+            qCWarning(XdgDesktopPortalKdeScreenshot) << "Failed to save screenshot:" << error;
+            response = PortalResponse::OtherError;
+        }
+        QDBusConnection::sessionBus().send(message.createReply({response, results}));
     });
 }
 
@@ -137,29 +151,82 @@ uint ScreenshotPortal::PickColor(const QDBusObjectPath &handle,
                                  const QVariantMap &options,
                                  QVariantMap &results)
 {
-    qCDebug(XdgDesktopPortalKdeScreenshot) << "PickColor called with parameters:";
-    qCDebug(XdgDesktopPortalKdeScreenshot) << "    handle: " << handle.path();
-    qCDebug(XdgDesktopPortalKdeScreenshot) << "    app_id: " << app_id;
-    qCDebug(XdgDesktopPortalKdeScreenshot) << "    parent_window: " << parent_window;
-    qCDebug(XdgDesktopPortalKdeScreenshot) << "    options: " << options;
+    qCDebug(XdgDesktopPortalKdeScreenshot) << "PickColor called";
 
-    QDBusMessage msg = QDBusMessage::createMethodCall(QStringLiteral("org.kde.KWin"),
-                                                      QStringLiteral("/ColorPicker"),
-                                                      QStringLiteral("org.kde.kwin.ColorPicker"),
-                                                      QStringLiteral("pick"));
-    QDBusReply<QColor> reply = QDBusConnection::sessionBus().call(msg);
-    if (reply.isValid() && !reply.error().isValid()) {
-        QColor selectedColor = reply.value();
-        ColorRGB color;
-        color.red = selectedColor.redF();
-        color.green = selectedColor.greenF();
-        color.blue = selectedColor.blueF();
+    Q_UNUSED(handle)
+    Q_UNUSED(app_id)
+    Q_UNUSED(parent_window)
+    Q_UNUSED(options)
 
-        results.insert(QStringLiteral("color"), QVariant::fromValue<ScreenshotPortal::ColorRGB>(color));
-        return PortalResponse::Success;
+    const QImage image = captureImage(false, true, true);
+    if (image.isNull()) {
+        return PortalResponse::OtherError;
     }
 
-    return PortalResponse::Cancelled;
+    const QPoint pos = QCursor::pos();
+    QRect workspaceGeometry;
+    for (QScreen* screen : QGuiApplication::screens()) {
+        workspaceGeometry = workspaceGeometry.united(screen->geometry());
+    }
+    const QPoint imagePos = pos - workspaceGeometry.topLeft();
+    results.insert(QStringLiteral("color"), QVariant::fromValue(colorAtImagePosition(image, imagePos)));
+    return PortalResponse::Success;
+}
+
+QString ScreenshotPortal::screenshotFilePath(const QString& baseDirectory, const QDateTime& timestamp)
+{
+    return QDir(baseDirectory).filePath(QStringLiteral("Screenshot_%1.png").arg(timestamp.toString(QStringLiteral("yyyyMMdd_hhmmss_zzz"))));
+}
+
+ScreenshotPortal::ColorRGB ScreenshotPortal::colorAtImagePosition(const QImage& image, const QPoint& position)
+{
+    if (image.isNull() || !image.rect().contains(position)) {
+        return {0.0, 0.0, 0.0};
+    }
+    const QColor color = image.pixelColor(position);
+    return {color.redF(), color.greenF(), color.blueF()};
+}
+
+QImage ScreenshotPortal::captureImage(bool interactive, bool includeCursor, bool includeDecorations) const
+{
+    Q_UNUSED(interactive)
+    Q_UNUSED(includeDecorations)
+    if (!m_capture) {
+        return {};
+    }
+    return m_capture->captureWorkspace(includeCursor);
+}
+
+bool ScreenshotPortal::saveImage(const QImage& image, QString* uri, QString* error) const
+{
+    if (image.isNull()) {
+        if (error) {
+            *error = QStringLiteral("capture produced an empty image");
+        }
+        return false;
+    }
+    QString directory = QStandardPaths::writableLocation(QStandardPaths::PicturesLocation);
+    if (directory.isEmpty()) {
+        directory = QDir::homePath();
+    }
+    QDir dir(directory);
+    if (!dir.exists() && !dir.mkpath(QStringLiteral("."))) {
+        if (error) {
+            *error = QStringLiteral("failed to create screenshot directory");
+        }
+        return false;
+    }
+    const QString path = screenshotFilePath(directory, QDateTime::currentDateTime());
+    if (!image.save(path, "PNG")) {
+        if (error) {
+            *error = QStringLiteral("failed to encode PNG");
+        }
+        return false;
+    }
+    if (uri) {
+        *uri = QUrl::fromLocalFile(path).toString();
+    }
+    return true;
 }
 
 #include "moc_screenshot.cpp"

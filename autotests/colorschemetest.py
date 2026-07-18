@@ -18,7 +18,8 @@ from typing import Final
 from gi.repository import Gio, GLib
 
 CMAKE_RUNTIME_OUTPUT_DIRECTORY: Final = os.environ.get("CMAKE_RUNTIME_OUTPUT_DIRECTORY", "/usr/libexec")
-PORTAL_SERVICE_NAME: Final = "org.freedesktop.impl.portal.desktop.kde"
+PORTAL_SERVICE_NAME: Final = os.environ.get("PORTAL_SERVICE_NAME", "org.freedesktop.impl.portal.desktop.sonicde")
+PORTAL_EXECUTABLE_NAME: Final = os.environ.get("PORTAL_EXECUTABLE_NAME", "xdg-desktop-portal-sonicde")
 GROUP: Final = "org.freedesktop.appearance"
 KEYS: Final = ("accent-color", "color-scheme")
 EXPECTED_SIGNATURES: Final = ("(ddd)", "u")
@@ -48,7 +49,10 @@ class OrgFreeDesktopAppearanceTests(unittest.TestCase):
         if not portal_launched:
             debug_environ = os.environ.copy()
             debug_environ["QT_LOGGING_RULES"] = "*.debug=true"
-            cls.portal_process = subprocess.Popen([os.path.join(CMAKE_RUNTIME_OUTPUT_DIRECTORY, "xdg-desktop-portal-kde")], env=debug_environ, stdout=sys.stderr, stderr=sys.stderr)
+            portal_executable = os.path.join(CMAKE_RUNTIME_OUTPUT_DIRECTORY, PORTAL_EXECUTABLE_NAME)
+            if not os.path.exists(portal_executable):
+                raise RuntimeError(f"Configured portal executable does not exist: {portal_executable}")
+            cls.portal_process = subprocess.Popen([portal_executable], env=debug_environ, stdout=sys.stderr, stderr=sys.stderr)
             for _ in range(10):
                 if name_has_owner(session_bus, PORTAL_SERVICE_NAME):
                     portal_launched = True

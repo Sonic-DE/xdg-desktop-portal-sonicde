@@ -15,16 +15,145 @@
 #include <QDBusContext>
 #include <QDBusMessage>
 #include <QDBusMetaType>
+#include <QFile>
 #include <QPalette>
+#include <QStandardPaths>
+
+#include <xcb/xcb.h>
+#include <xcb/xinput.h>
 
 #include <KConfigGroup>
 #include <KConfigWatcher>
 
 #include "desktopportal.h"
-#include "tabletmodemanager_interface.h"
-#include "virtualkeyboard_interface.h"
-
 using namespace Qt::Literals::StringLiterals;
+
+namespace {
+struct XInputDeviceState {
+    bool touchAvailable = false;
+    bool tabletModeAvailable = false;
+    bool tabletModeEnabled = false;
+};
+
+static xcb_atom_t internAtom(xcb_connection_t* connection, const QByteArray& name)
+{
+    auto* reply = xcb_intern_atom_reply(connection, xcb_intern_atom(connection, false, name.size(), name.constData()), nullptr);
+    if (!reply)
+        return XCB_ATOM_NONE;
+    const xcb_atom_t atom = reply->atom;
+    free(reply);
+    return atom;
+}
+
+static XInputDeviceState queryXInputDeviceState()
+{
+    XInputDeviceState state;
+    xcb_connection_t* connection = xcb_connect(nullptr, nullptr);
+    if (!connection || xcb_connection_has_error(connection)) {
+        if (connection)
+            xcb_disconnect(connection);
+        return state;
+    }
+    auto* reply = xcb_input_xi_query_device_reply(connection,
+        xcb_input_xi_query_device(connection, XCB_INPUT_DEVICE_ALL), nullptr);
+    if (!reply) {
+        xcb_disconnect(connection);
+        return state;
+    }
+    const xcb_atom_t tabletModeAtom = internAtom(connection, QByteArrayLiteral("libinput Tablet Mode Switch"));
+    for (auto it = xcb_input_xi_query_device_infos_iterator(reply); it.rem; xcb_input_xi_device_info_next(&it)) {
+        const auto* device = it.data;
+        for (auto classIt = xcb_input_xi_device_info_classes_iterator(device); classIt.rem; xcb_input_device_class_next(&classIt)) {
+            if (classIt.data->type == XCB_INPUT_DEVICE_CLASS_TYPE_TOUCH)
+                state.touchAvailable = true;
+        }
+        if (tabletModeAtom == XCB_ATOM_NONE)
+            continue;
+        auto* property = xcb_input_xi_get_property_reply(connection,
+            xcb_input_xi_get_property(connection, device->deviceid, false, tabletModeAtom,
+                XCB_ATOM_ANY, 0, 1),
+            nullptr);
+        if (!property || property->num_items == 0) {
+            free(property);
+            continue;
+        }
+        state.tabletModeAvailable = true;
+        const auto* value = xcb_input_xi_get_property_items(property);
+        if (property->format == 8)
+            state.tabletModeEnabled = *reinterpret_cast<const uint8_t*>(value) != 0;
+        else if (property->format == 32)
+            state.tabletModeEnabled = *reinterpret_cast<const uint32_t*>(value) != 0;
+        free(property);
+    }
+    free(reply);
+    xcb_disconnect(connection);
+
+    QFile chassis(QStringLiteral("/sys/class/dmi/id/chassis_type"));
+    if (chassis.open(QIODevice::ReadOnly)) {
+        bool ok = false;
+        const int type = QString::fromLatin1(chassis.readAll()).trimmed().toInt(&ok);
+        if (ok && (type == 30 || type == 31 || type == 32))
+            state.tabletModeAvailable = true;
+    }
+    return state;
+}
+
+struct VirtualKeyboardState {
+    bool available = false;
+    bool visible = false;
+};
+
+static VirtualKeyboardState queryVirtualKeyboardState()
+{
+    VirtualKeyboardState state;
+    static const QStringList executableNames{u"maliit-keyboard"_s, u"onboard"_s, u"florence"_s};
+    state.available = std::ranges::any_of(executableNames, [](const QString& name) {
+        return !QStandardPaths::findExecutable(name).isEmpty();
+    });
+
+    int screenNumber = 0;
+    xcb_connection_t* connection = xcb_connect(nullptr, &screenNumber);
+    if (!connection || xcb_connection_has_error(connection)) {
+        if (connection)
+            xcb_disconnect(connection);
+        return state;
+    }
+    auto screenIt = xcb_setup_roots_iterator(xcb_get_setup(connection));
+    for (int i = 0; i < screenNumber; ++i)
+        xcb_screen_next(&screenIt);
+    if (!screenIt.data) {
+        xcb_disconnect(connection);
+        return state;
+    }
+    auto* tree = xcb_query_tree_reply(connection, xcb_query_tree(connection, screenIt.data->root), nullptr);
+    if (!tree) {
+        xcb_disconnect(connection);
+        return state;
+    }
+    const auto* children = xcb_query_tree_children(tree);
+    for (int i = 0; i < xcb_query_tree_children_length(tree); ++i) {
+        auto* wmClass = xcb_get_property_reply(connection,
+            xcb_get_property(connection, false, children[i], XCB_ATOM_WM_CLASS, XCB_ATOM_STRING, 0, 256), nullptr);
+        const QString value = wmClass
+            ? QString::fromLatin1(static_cast<const char*>(xcb_get_property_value(wmClass)), xcb_get_property_value_length(wmClass)).toLower()
+            : QString{};
+        free(wmClass);
+        const bool keyboardWindow = value.contains(u"maliit"_s) || value.contains(u"onboard"_s)
+            || value.contains(u"florence"_s) || value.contains(u"virtualkeyboard"_s);
+        if (!keyboardWindow)
+            continue;
+        state.available = true;
+        auto* attributes = xcb_get_window_attributes_reply(connection, xcb_get_window_attributes(connection, children[i]), nullptr);
+        state.visible = attributes && attributes->map_state == XCB_MAP_STATE_VIEWABLE;
+        free(attributes);
+        if (state.visible)
+            break;
+    }
+    free(tree);
+    xcb_disconnect(connection);
+    return state;
+}
+}
 
 static bool groupMatches(const QString &group, const QStringList &patterns)
 {
@@ -58,28 +187,11 @@ class VirtualKeyboardSettings : public SettingsModule
     static constexpr auto KEY_ENABLED = "enabled"_L1;
     static constexpr auto KEY_VISIBLE = "visible"_L1;
     static constexpr auto KEY_WILL_SHOW_ON_ACTIVE = "willShowOnActive"_L1;
-    static constexpr auto KEYS = {KEY_ACTIVE, KEY_ACTIVE_CLIENT_SUPPORTS_TEXT_INPUT, KEY_AVAILABLE, KEY_ENABLED, KEY_VISIBLE, KEY_WILL_SHOW_ON_ACTIVE};
 
 public:
-    explicit VirtualKeyboardSettings(QObject *parent = nullptr)
+    explicit VirtualKeyboardSettings(QObject* parent = nullptr)
         : SettingsModule(parent)
-        , m_interface(u"org.kde.KWin"_s, u"/VirtualKeyboard"_s, QDBusConnection::sessionBus())
     {
-        connect(&m_interface, &OrgKdeKwinVirtualKeyboardInterface::activeChanged, this, [this]() {
-            Q_EMIT settingChanged(group(), KEY_ACTIVE, QDBusVariant(readInternal(KEY_ACTIVE)));
-        });
-        connect(&m_interface, &OrgKdeKwinVirtualKeyboardInterface::activeClientSupportsTextInputChanged, this, [this]() {
-            Q_EMIT settingChanged(group(), KEY_ACTIVE_CLIENT_SUPPORTS_TEXT_INPUT, QDBusVariant(readInternal(KEY_ACTIVE_CLIENT_SUPPORTS_TEXT_INPUT)));
-        });
-        connect(&m_interface, &OrgKdeKwinVirtualKeyboardInterface::availableChanged, this, [this]() {
-            Q_EMIT settingChanged(group(), KEY_AVAILABLE, QDBusVariant(readInternal(KEY_AVAILABLE)));
-        });
-        connect(&m_interface, &OrgKdeKwinVirtualKeyboardInterface::enabledChanged, this, [this]() {
-            Q_EMIT settingChanged(group(), KEY_ENABLED, QDBusVariant(readInternal(KEY_ENABLED)));
-        });
-        connect(&m_interface, &OrgKdeKwinVirtualKeyboardInterface::visibleChanged, this, [this]() {
-            Q_EMIT settingChanged(group(), KEY_VISIBLE, QDBusVariant(readInternal(KEY_VISIBLE)));
-        });
     }
 
     inline QString group() final
@@ -90,41 +202,24 @@ public:
     VariantMapMap readAll(const QStringList &groups) final
     {
         Q_UNUSED(groups);
+        const auto state = queryVirtualKeyboardState();
         VariantMapMap result;
-        QVariantMap map;
-        for (const auto &key : KEYS) {
-            if (const auto value = readInternal(key); value.isValid()) {
-                map.insert(key, value);
-            }
-        }
+        QVariantMap map{{KEY_ACTIVE, state.visible},
+            {KEY_ACTIVE_CLIENT_SUPPORTS_TEXT_INPUT, false},
+            {KEY_AVAILABLE, state.available},
+            {KEY_ENABLED, state.available},
+            {KEY_VISIBLE, state.visible},
+            {KEY_WILL_SHOW_ON_ACTIVE, state.available}};
         result.insert(group(), map);
         return result;
     }
 
     QVariant read(const QString &group, const QString &key) final
     {
-        Q_UNUSED(group);
-        if (std::ranges::contains(KEYS, key)) {
-            return readInternal(key);
-        }
-        return {};
+        return readAll({group}).value(this->group()).value(key);
     }
-
-private:
-    inline QVariant readInternal(const QString &key)
-    {
-        if (key == KEY_WILL_SHOW_ON_ACTIVE) {
-            return m_interface.willShowOnActive().value();
-        }
-        return m_interface.property(qUtf8Printable(key));
-    }
-
-    OrgKdeKwinVirtualKeyboardInterface m_interface;
 };
 
-// For consistency reasons TabletSettings have their property names changed.
-// org.kde.TabletModel.enabled on our end is called tabletMode on the KWin side.
-// As a consequence of that we do not meta program a mapping but instead manually write out the logic per key.
 class TabletModeSettings : public SettingsModule
 {
     Q_OBJECT
@@ -132,18 +227,9 @@ class TabletModeSettings : public SettingsModule
     static constexpr auto KEY_AVAILABLE = "available"_L1;
 
 public:
-    explicit TabletModeSettings(QObject *parent = nullptr)
+    explicit TabletModeSettings(QObject* parent = nullptr)
         : SettingsModule(parent)
-        , m_interface(u"org.kde.KWin"_s, u"/org/kde/KWin"_s, QDBusConnection::sessionBus(), this)
     {
-        connect(&m_interface, &OrgKdeKWinTabletModeManagerInterface::tabletModeAvailableChanged, this, [this](bool available) {
-            Q_EMIT settingChanged(group(), KEY_AVAILABLE, QDBusVariant(available));
-        });
-        connect(&m_interface, &OrgKdeKWinTabletModeManagerInterface::tabletModeChanged, this, [this](bool enabled) {
-            Q_EMIT settingChanged(group(), KEY_ENABLED, QDBusVariant(enabled));
-            qputenv("BREEZE_IS_TABLET_MODE", enabled ? QByteArrayLiteral("1") : QByteArrayLiteral("0"));
-        });
-        qputenv("BREEZE_IS_TABLET_MODE", m_interface.tabletMode() ? QByteArrayLiteral("1") : QByteArrayLiteral("0"));
     }
 
     inline QString group() final
@@ -154,25 +240,17 @@ public:
     VariantMapMap readAll(const QStringList &groups) final
     {
         Q_UNUSED(groups);
+        const auto state = queryXInputDeviceState();
+        qputenv("BREEZE_IS_TABLET_MODE", state.tabletModeEnabled ? QByteArrayLiteral("1") : QByteArrayLiteral("0"));
         VariantMapMap result;
-        result.insert(group(), {{KEY_AVAILABLE, read(group(), KEY_AVAILABLE)}, {KEY_ENABLED, read(group(), KEY_ENABLED)}});
+        result.insert(group(), {{KEY_AVAILABLE, state.tabletModeAvailable || state.touchAvailable}, {KEY_ENABLED, state.tabletModeEnabled}});
         return result;
     }
 
     QVariant read(const QString &group, const QString &key) final
     {
-        Q_UNUSED(group);
-        if (key == KEY_AVAILABLE) {
-            return m_interface.tabletModeAvailable();
-        }
-        if (key == KEY_ENABLED) {
-            return m_interface.tabletMode();
-        }
-        return {};
+        return readAll({group}).value(this->group()).value(key);
     }
-
-private:
-    OrgKdeKWinTabletModeManagerInterface m_interface;
 };
 
 /* accent-color */

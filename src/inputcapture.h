@@ -1,6 +1,5 @@
 /*
     SPDX-License-Identifier: LGPL-2.1-only OR LGPL-3.0-only OR LicenseRef-KDE-Accepted-LGPL
-    SPDX-FileCopyrightText: 2024 David Redondo <kde@david-redondo.de>
 */
 
 #ifndef XDG_DESKTOP_PORTAL_KDE_INPUTCAPTURE_H
@@ -15,6 +14,8 @@
 
 class QDBusMessage;
 class InputCaptureSession;
+class X11Controller;
+class InputCaptureBackend;
 
 class InputCapturePortal : public QDBusAbstractAdaptor
 {
@@ -23,7 +24,8 @@ class InputCapturePortal : public QDBusAbstractAdaptor
     Q_PROPERTY(uint version READ version CONSTANT)
     Q_PROPERTY(uint SupportedCapabilities READ SupportedCapabilities CONSTANT)
 public:
-    explicit InputCapturePortal(QObject *parent);
+    explicit InputCapturePortal(QObject* parent, X11Controller* controller = nullptr);
+    ~InputCapturePortal() override;
 
     enum Capability : uint {
         None = 0x0,
@@ -50,10 +52,7 @@ public:
     {
         return 2;
     }
-    uint SupportedCapabilities() const
-    {
-        return All;
-    };
+    uint SupportedCapabilities() const;
 
     struct zone {
         uint width;
@@ -65,14 +64,14 @@ public:
     };
 
 public Q_SLOTS:
-    void CreateSession(const QDBusObjectPath &handle,
-                       const QDBusObjectPath &session_handle,
-                       const QString &app_id,
-                       const QString &parent_window,
-                       const QVariantMap &options,
-                       const QDBusMessage &message,
-                       uint &replyResponse,
-                       QVariantMap &replyResults);
+    uint CreateSession(const QDBusObjectPath& handle,
+        const QDBusObjectPath& session_handle,
+        const QString& app_id,
+        const QString& parent_window,
+        const QVariantMap& options,
+        const QDBusMessage& message,
+        uint& replyResponse,
+        QVariantMap& replyResults);
 
     [[nodiscard]] QVariantMap CreateSession2(const QDBusObjectPath &session_handle, const QString &app_id, const QVariantMap &options);
 
@@ -108,8 +107,9 @@ Q_SIGNALS:
     void ZonesChanged(const QDBusObjectPath &session_handle, const QVariantMap &options);
 
 private:
-    bool setupInputCaptureSession(InputCaptureSession *session, InputCapturePortal::Capabilities capabilities);
     uint m_zoneId = 0;
+    X11Controller* m_controller = nullptr;
+    InputCaptureBackend* m_backend = nullptr;
 };
 Q_DECLARE_OPERATORS_FOR_FLAGS(InputCapturePortal::Capabilities)
 
@@ -127,15 +127,30 @@ public:
     }
 
     InputCapturePortal::State state;
-
-    void connect(const QDBusObjectPath &path);
-    QDBusObjectPath kwinInputCapture() const;
-
-    QDBusPendingReply<void> enable();
-    QDBusPendingReply<void> disable();
-    QDBusPendingReply<void> release(const QPointF &cusorPosition, bool applyPosition);
-
-    QDBusPendingReply<QDBusUnixFileDescriptor> connectToEIS();
+    InputCapturePortal::Capabilities capabilities() const
+    {
+        return m_capabilities;
+    }
+    void setCapabilities(InputCapturePortal::Capabilities capabilities)
+    {
+        m_capabilities = capabilities;
+    }
+    InputCapturePortal::PersistMode persistMode() const
+    {
+        return m_persistMode;
+    }
+    void setPersistMode(InputCapturePortal::PersistMode mode)
+    {
+        m_persistMode = mode;
+    }
+    bool started() const
+    {
+        return m_started;
+    }
+    void setStarted(bool started)
+    {
+        m_started = started;
+    }
 
     void addBarrier(uint id, const QPair<QPoint, QPoint> &barriers);
     void clearBarriers();
@@ -150,7 +165,9 @@ Q_SIGNALS:
 
 private:
     bool m_clipboardEnabled = false;
-    QDBusObjectPath m_kwinInputCapture;
+    InputCapturePortal::Capabilities m_capabilities;
+    InputCapturePortal::PersistMode m_persistMode = InputCapturePortal::PersistMode::None;
+    bool m_started = false;
     QList<std::tuple<uint, QPoint, QPoint>> m_barriers;
 };
 

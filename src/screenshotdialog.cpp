@@ -2,126 +2,65 @@
  * SPDX-FileCopyrightText: 2018 Red Hat Inc
  *
  * SPDX-License-Identifier: LGPL-2.0-or-later
- *
- * SPDX-FileCopyrightText: 2018 Jan Grulich <jgrulich@redhat.com>
  */
 
 #include "screenshotdialog.h"
 #include "screenshotdialog_debug.h"
+#include "x11/x11capture.h"
 
-#include <QPushButton>
+#include <QGuiApplication>
+#include <QScreen>
+#include <QStandardItemModel>
+#include <QStandardPaths>
+#include <QUrl>
+#include <QVariantMap>
+#include <QWindow>
 
 #include <KLocalizedString>
-#include <QDBusConnection>
-#include <QDBusMessage>
-#include <QDBusReply>
-#include <QDBusUnixFileDescriptor>
-#include <QFutureWatcher>
-#include <QStandardItemModel>
-#include <QTimer>
-#include <QWindow>
-#include <QtConcurrentRun>
-#include <qplatformdefs.h>
-
-#include <fcntl.h>
-#include <poll.h>
-#include <unistd.h>
 
 using namespace Qt::StringLiterals;
 
-static int readData(int fd, QByteArray &data)
+ScreenshotCapture::ScreenshotCapture(QObject* parent)
+    : QObject(parent)
 {
-    char buffer[4096];
-    pollfd pfds[1];
-    pfds[0].fd = fd;
-    pfds[0].events = POLLIN;
-
-    while (true) {
-        // give user 30 sec to click a window, afterwards considered as error
-        const int ready = poll(pfds, 1, 30000);
-        if (ready < 0) {
-            if (errno != EINTR) {
-                qWarning() << "poll() failed:" << strerror(errno);
-                return -1;
-            }
-        } else if (ready == 0) {
-            qDebug() << "failed to read screenshot: timeout";
-            return -1;
-        } else if (pfds[0].revents & POLLIN) {
-            const int n = QT_READ(fd, buffer, sizeof(buffer));
-
-            if (n < 0) {
-                qWarning() << "read() failed:" << strerror(errno);
-                return -1;
-            } else if (n == 0) {
-                return 0;
-            } else { // (n > 0)
-                data.append(buffer, n);
-            }
-        } else if (pfds[0].revents & POLLHUP) {
-            return 0;
-        } else {
-            qWarning() << "failed to read screenshot: pipe is broken";
-            return -1;
-        }
-    }
-
-    Q_UNREACHABLE();
 }
 
-static QImage allocateImage(const QVariantMap &metadata)
+ScreenshotCapture::~ScreenshotCapture() = default;
+
+QImage ScreenshotCapture::captureWorkspace(bool includeCursor)
 {
-    bool ok;
-
-    const uint width = metadata.value(QStringLiteral("width")).toUInt(&ok);
-    if (!ok) {
-        return QImage();
-    }
-
-    const uint height = metadata.value(QStringLiteral("height")).toUInt(&ok);
-    if (!ok) {
-        return QImage();
-    }
-
-    const uint format = metadata.value(QStringLiteral("format")).toUInt(&ok);
-    if (!ok) {
-        return QImage();
-    }
-
-    return QImage(width, height, QImage::Format(format));
+    X11Capture capture;
+    return capture.captureWorkspace(includeCursor);
 }
 
-static QImage readImage(int pipeFd, const QVariantMap &metadata)
+QImage ScreenshotCapture::captureActiveWindow(bool includeCursor, bool includeDecorations)
 {
-    QByteArray content;
-    if (readData(pipeFd, content) != 0) {
-        close(pipeFd);
-        return QImage();
-    }
-    close(pipeFd);
-
-    QImage result = allocateImage(metadata);
-    if (result.isNull()) {
-        return QImage();
-    }
-
-    QDataStream ds(content);
-    ds.readRawData(reinterpret_cast<char *>(result.bits()), result.sizeInBytes());
-    return result;
+    Q_UNUSED(includeDecorations)
+    X11Capture capture;
+    QImage image = capture.captureActiveWindow(includeCursor);
+    return image.isNull() ? capture.captureWorkspace(includeCursor) : image;
 }
 
-ScreenshotDialog::ScreenshotDialog(QObject *parent)
+ScreenshotDialog::ScreenshotDialog(QObject* parent)
+    : ScreenshotDialog(new ScreenshotCapture, parent)
+{
+}
+
+ScreenshotDialog::ScreenshotDialog(ScreenshotCapture* capture, QObject* parent)
     : QuickDialog(parent)
+    , m_capture(capture)
 {
+    if (m_capture) {
+        m_capture->setParent(this);
+    }
     QStandardItemModel *model = new QStandardItemModel(this);
     model->appendRow(new QStandardItem(i18n("Full Screen")));
     model->appendRow(new QStandardItem(i18n("Current Screen")));
     model->appendRow(new QStandardItem(i18n("Active Window")));
-    create(QStringLiteral("ScreenshotDialog"),
-           {
-               {u"app"_s, QVariant::fromValue<QObject *>(this)},
-               {u"screenshotTypesModel"_s, QVariant::fromValue<QObject *>(model)},
-           });
+    QVariantMap props;
+    props.insert(u"app"_s, QVariant::fromValue<QObject*>(this));
+    props.insert(u"screenshotTypesModel"_s, QVariant::fromValue<QObject*>(model));
+    create(QStringLiteral("ScreenshotDialog"), props);
 }
 
 QImage ScreenshotDialog::image() const
@@ -131,91 +70,45 @@ QImage ScreenshotDialog::image() const
 
 void ScreenshotDialog::takeScreenshotNonInteractive()
 {
-    QFuture<QImage> future = takeScreenshot();
-    if (!future.isStarted()) {
-        return;
+    m_image = takeScreenshot(FullScreen, true, true);
+    if (m_image.isNull()) {
+        Q_EMIT failed();
     }
-
-    future.waitForFinished();
-
-    if (future.isCanceled()) {
-        return;
-    }
-
-    m_image = future.result();
 }
 
 void ScreenshotDialog::takeScreenshotInteractive()
 {
-    const QFuture<QImage> future = takeScreenshot();
-    if (!future.isStarted()) {
-        return;
-    }
-
-    QFutureWatcher<QImage> *watcher = new QFutureWatcher<QImage>(this);
-    QObject::connect(watcher, &QFutureWatcher<QImage>::finished, this, [watcher, this] {
-        watcher->deleteLater();
-
-        if (watcher->isCanceled()) {
-            return;
+    if (!windowHandle()) {
+        m_image = takeScreenshot(FullScreen, true, true);
+    } else {
+        const auto type = static_cast<ScreenshotType>(windowHandle()->property("screenshotType").toInt());
+        const bool includeCursor = windowHandle()->property("withCursor").toBool();
+        const bool includeDecorations = windowHandle()->property("withBorders").toBool();
+        m_image = takeScreenshot(type, includeCursor, includeDecorations);
+        if (!m_image.isNull()) {
+            const QString tempPath = QStandardPaths::writableLocation(QStandardPaths::TempLocation) + u"/xdg-desktop-portal-screenshot-preview.png"_s;
+            m_image.save(tempPath, "PNG");
+            windowHandle()->setProperty("screenshotImage", QUrl::fromLocalFile(tempPath));
         }
-
-        m_image = watcher->result();
-        m_theDialog->setProperty("screenshotImage", m_image);
-    });
-
-    watcher->setFuture(future);
+    }
+    if (m_image.isNull()) {
+        Q_EMIT failed();
+    }
 }
 
-QFuture<QImage> ScreenshotDialog::takeScreenshot()
+QImage ScreenshotDialog::takeScreenshot(ScreenshotType type, bool includeCursor, bool includeDecorations) const
 {
-    int pipeFds[2];
-    if (pipe2(pipeFds, O_CLOEXEC | O_NONBLOCK) != 0) {
-        Q_EMIT failed();
+    if (!m_capture) {
         return {};
     }
-
-    QVariantMap options;
-    options.insert(QStringLiteral("native-resolution"), true); // match xdg-desktop-portal-gnome, and fixes flameshot!3164
-    if (m_theDialog->property("withCursor").toBool()) {
-        options.insert(QStringLiteral("include-cursor"), true);
-    }
-    if (m_theDialog->property("withBorders").toBool()) {
-        options.insert(QStringLiteral("include-decoration"), true);
-    }
-
-    QString method;
-    switch (ScreenshotType(m_theDialog->property("screenshotType").toInt())) {
+    switch (type) {
     case FullScreen:
-        method = QStringLiteral("CaptureWorkspace");
-        break;
     case CurrentScreen:
-        method = QStringLiteral("CaptureActiveScreen");
-        break;
+        return m_capture->captureWorkspace(includeCursor);
     case ActiveWindow:
-        method = QStringLiteral("CaptureActiveWindow");
-        break;
+        return m_capture->captureActiveWindow(includeCursor, includeDecorations);
     }
-
-    QVariantList arguments;
-    arguments.append(options);
-    arguments.append(QVariant::fromValue(QDBusUnixFileDescriptor(pipeFds[1])));
-
-    QDBusMessage message = QDBusMessage::createMethodCall(QStringLiteral("org.kde.KWin.ScreenShot2"),
-                                                          QStringLiteral("/org/kde/KWin/ScreenShot2"),
-                                                          QStringLiteral("org.kde.KWin.ScreenShot2"),
-                                                          method);
-    message.setArguments(arguments);
-
-    QDBusReply<QVariantMap> reply = QDBusConnection::sessionBus().call(message);
-    ::close(pipeFds[1]);
-    if (!reply.isValid()) {
-        qCWarning(XdgDesktopPortalKdeScreenshotDialog) << method << "failed:" << reply.error();
-        close(pipeFds[0]);
-        return QFuture<QImage>();
-    }
-
-    return QtConcurrent::run(readImage, pipeFds[0], reply);
+    return {};
 }
 
 #include "moc_screenshotdialog.cpp"

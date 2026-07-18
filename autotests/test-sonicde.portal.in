@@ -1,0 +1,10 @@
+[portal]
+UseIn=KDE;SONICDE
+DefaultProvider=org.freedesktop.impl.portal.desktop.sonicde.test
+```
+
+[org.freedesktop.impl.portal.Desktop]
+@PORTAL_SERVICE_NAME@=@PORTAL_EXECUTABLE_NAME@
+
+[preferred]
+org.freedesktop.impl.portal.ScreenCast=org.freedesktop.impl.portal.desktop.sonicde.test

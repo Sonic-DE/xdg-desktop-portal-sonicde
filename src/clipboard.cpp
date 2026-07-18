@@ -1,219 +1,61 @@
 /*
     SPDX-License-Identifier: LGPL-2.1-only OR LGPL-3.0-only OR LicenseRef-KDE-Accepted-LGPL
-    SPDX-FileCopyrightText: 2020 David Edmundson <davidedmundson@kde.org>
-    SPDX-FileCopyrightText: 2021 Méven Car <meven.car@enioka.com>
-    SPDX-FileCopyrightText: 2024 David Redondo <kde@david-redondo.de>
 */
 
 #include "clipboard.h"
-
 #include "clipboard_debug.h"
 #include "inputcapture.h"
 #include "remotedesktop.h"
 #include "session.h"
+#include "x11/x11clipboard.h"
 
 #include <QDBusConnection>
-#include <QWaylandClientExtensionTemplate>
-
-#include <qwayland-ext-data-control-v1.h>
-
 #include <fcntl.h>
 #include <unistd.h>
 
 using namespace Qt::StringLiterals;
-using namespace std::chrono_literals;
-
-class DataControlManager : public QWaylandClientExtensionTemplate<DataControlManager>, public QtWayland::ext_data_control_manager_v1
-{
-    Q_OBJECT
-public:
-    DataControlManager()
-        : QWaylandClientExtensionTemplate<DataControlManager>(1)
-    {
-        initialize();
-    }
-
-    ~DataControlManager() override
-    {
-        destroy();
-    }
-};
-
-class DataControlOffer : public QtWayland::ext_data_control_offer_v1
-{
-public:
-    explicit DataControlOffer(::ext_data_control_offer_v1 *id)
-        : QtWayland::ext_data_control_offer_v1(id)
-    {
-    }
-
-    ~DataControlOffer() override
-    {
-        destroy();
-    }
-
-    QStringList formats() const
-    {
-        return m_receivedFormats;
-    }
-
-    static DataControlOffer *get(::ext_data_control_offer_v1 *object)
-    {
-        auto derivated = QtWayland::ext_data_control_offer_v1::fromObject(object);
-        return dynamic_cast<DataControlOffer *>(derivated); // dynamic because of the dual inheritance
-    }
-
-protected:
-    void ext_data_control_offer_v1_offer(const QString &mime_type) override
-    {
-        if (!m_receivedFormats.contains(mime_type)) {
-            m_receivedFormats << mime_type;
-        }
-    }
-
-private:
-    QStringList m_receivedFormats;
-};
-
-class DataControlSource : public QObject, public QtWayland::ext_data_control_source_v1
-{
-    Q_OBJECT
-public:
-    DataControlSource(::ext_data_control_source_v1 *id, Session *session, const QStringList &mimeTypes)
-        : ext_data_control_source_v1(id)
-        , owner(session)
-    {
-        for (const QString &format : mimeTypes) {
-            offer(format);
-        }
-    }
-    ~DataControlSource() override
-    {
-        destroy();
-    }
-
-    const Session *owner;
-
-Q_SIGNALS:
-    void cancelled();
-    void dataRequested(const DataControlSource &source, const QString &mime_type, int fd);
-
-protected:
-    void ext_data_control_source_v1_send(const QString &mime_type, int32_t fd) override
-    {
-        Q_EMIT dataRequested(*this, mime_type, fd);
-    }
-    void ext_data_control_source_v1_cancelled() override
-    {
-        Q_EMIT cancelled();
-    }
-};
-
-class DataControlDevice : public QObject, public QtWayland::ext_data_control_device_v1
-{
-    Q_OBJECT
-public:
-    explicit DataControlDevice(struct ::ext_data_control_device_v1 *id)
-        : QtWayland::ext_data_control_device_v1(id)
-    {
-    }
-
-    ~DataControlDevice()
-    {
-        destroy();
-    }
-
-    void setSource(std::unique_ptr<DataControlSource> source)
-    {
-        set_selection(source ? source->object() : nullptr);
-        // Note the previous selection is destroyed after the set_selection request.
-        m_source = std::move(source);
-        if (m_source) {
-            connect(m_source.get(), &DataControlSource::cancelled, this, [this]() {
-                m_source.reset();
-            });
-        }
-    }
-
-    DataControlOffer *currentOffer()
-    {
-        return m_currentOffer.get();
-    }
-    DataControlSource *source()
-    {
-        return m_source.get();
-    }
-
-Q_SIGNALS:
-    void offerChanged();
-
-protected:
-    void ext_data_control_device_v1_data_offer(::ext_data_control_offer_v1 *id) override
-    {
-        // this will become memory managed when we retrieve the selection event
-        // a compositor calling data_offer without doing that would be a bug
-        new DataControlOffer(id);
-    }
-
-    void ext_data_control_device_v1_selection(::ext_data_control_offer_v1 *id) override
-    {
-        if (!id) {
-            m_source.reset();
-        } else {
-            m_currentOffer.reset(DataControlOffer::get(id));
-        }
-        Q_EMIT offerChanged();
-    }
-
-    void ext_data_control_device_v1_primary_selection(::ext_data_control_offer_v1 *id) override
-    {
-        if (!id) {
-            return;
-        }
-        delete DataControlOffer::get(id);
-    }
-
-private:
-    std::unique_ptr<DataControlSource> m_source;
-    std::unique_ptr<DataControlOffer> m_currentOffer;
-};
 
 bool isClipboardEnabledSession(const QDBusObjectPath &path)
 {
     if (auto remoteDesktopSession = Session::getSession<RemoteDesktopSession>(path.path())) {
-        return remoteDesktopSession->clipboardEnabled();
+        return remoteDesktopSession->started() && remoteDesktopSession->clipboardEnabled();
     }
     if (auto inputCaptureSession = Session::getSession<InputCaptureSession>(path.path())) {
-        return inputCaptureSession->clipboardEnabled();
+        return inputCaptureSession->started() && inputCaptureSession->clipboardEnabled();
     }
     return false;
 }
 
-ClipboardPortal::ClipboardPortal(QObject *parent)
+ClipboardPortal::ClipboardPortal(QObject* parent, X11Clipboard* backend)
     : QDBusAbstractAdaptor(parent)
-    , m_dataControlManager(std::make_unique<DataControlManager>())
+    , m_backend(backend ? backend : new X11Clipboard(parent))
 {
-    auto waylandApp = qGuiApp->nativeInterface<QNativeInterface::QWaylandApplication>();
-    if (!waylandApp) {
-        qCWarning(XdgDesktopPortalKdeClipboard) << "Couldn't resolve QWaylandApplication - clipboard will not work";
-        return;
+    QString error;
+    if (!m_backend->initialize(&error)) {
+        qCWarning(XdgDesktopPortalKdeClipboard) << "Failed to initialize X11 clipboard:" << error;
     }
-    if (!m_dataControlManager->isActive()) {
-        qCWarning(XdgDesktopPortalKdeClipboard) << "Couldn't bind data control - clipboard will not work";
-        return;
-    }
-    auto seat = waylandApp->seat();
-    if (!seat) {
-        return;
-    }
-    m_dataControlDevice = std::make_unique<DataControlDevice>(m_dataControlManager->get_data_device(seat));
+    connect(m_backend, &X11Clipboard::selectionOwnerChanged, this, [this](const QDBusObjectPath& session, const QStringList& mimeTypes, bool isOwner) {
+        QVariantMap options;
+        options.insert(u"mime_types"_s, mimeTypes);
+        options.insert(u"session_is_owner"_s, isOwner);
+        Q_EMIT SelectionOwnerChanged(session, options);
+    });
 }
 
-ClipboardPortal::~ClipboardPortal()
+ClipboardPortal::~ClipboardPortal() = default;
+
+QVariant ClipboardPortal::fetchData(Session* session, const QString& mimetype)
 {
-    for (const auto &pendingTransfer : m_pendingTransfers) {
-        close(pendingTransfer.fd);
+    if (!session || !m_backend) {
+        return {};
     }
+    const QDBusObjectPath handle(session->handle());
+    if (!isClipboardEnabledSession(handle))
+        return {};
+    activateBackendSession(handle);
+    QString error;
+    const auto fd = m_backend->requestRead(handle, mimetype, &error);
+    return fd.isValid() ? QVariant::fromValue(fd) : QVariant{};
 }
 
 void ClipboardPortal::RequestClipboard(const QDBusObjectPath &session_handle, const QVariantMap &options)
@@ -222,10 +64,11 @@ void ClipboardPortal::RequestClipboard(const QDBusObjectPath &session_handle, co
     qCDebug(XdgDesktopPortalKdeClipboard) << "    session_handle: " << session_handle.path();
     qCDebug(XdgDesktopPortalKdeClipboard) << "    options: " << options;
 
-    auto session = Session::getSession(session_handle.path());
+    Q_UNUSED(options)
 
-    if (!m_dataControlDevice) {
-        qCWarning(XdgDesktopPortalKdeClipboard) << "Data control is not active - not enabling clipboard";
+    auto session = Session::getSession(session_handle.path());
+    if (!session) {
+        qCWarning(XdgDesktopPortalKdeClipboard) << "Tried enabling clipboard on unknown session" << session_handle.path();
         return;
     }
 
@@ -234,25 +77,28 @@ void ClipboardPortal::RequestClipboard(const QDBusObjectPath &session_handle, co
     } else if (auto inputCaptureSession = qobject_cast<InputCaptureSession *>(session)) {
         inputCaptureSession->setClipboardEnabled(true);
     } else {
-        qCWarning(XdgDesktopPortalKdeClipboard) << "Tried enabling clipboard on unsupported session" << session_handle.path() << "type" << session->type();
+        qCWarning(XdgDesktopPortalKdeClipboard) << "Tried enabling clipboard on unsupported session" << session_handle.path();
         return;
     }
-
-    connect(session, &Session::closed, m_dataControlDevice.get(), [session, this] {
-        if (m_dataControlDevice->source() && m_dataControlDevice->source()->owner == session) {
-            qCDebug(XdgDesktopPortalKdeClipboard) << "Session closed while owning the clipboard, unsetting clipboard";
-            m_dataControlDevice->setSource(nullptr);
+    connect(session, &Session::closed, this, [this, session_handle] {
+        m_backend->setSessionActive(session_handle, false);
+        m_backend->authorizeSession(session_handle, false);
+        m_sessionMime.remove(session_handle.path());
+        for (auto it = m_serialSession.begin(); it != m_serialSession.end();) {
+            if (it.value() == session_handle.path()) {
+                m_serialMime.remove(it.key());
+                it = m_serialSession.erase(it);
+            } else {
+                ++it;
+            }
         }
     });
+}
 
-    connect(m_dataControlDevice.get(), &DataControlDevice::offerChanged, session, [session, this] {
-        Q_EMIT SelectionOwnerChanged(
-            QDBusObjectPath(session->handle()),
-            {
-                {u"mime_types"_s, m_dataControlDevice->currentOffer() ? m_dataControlDevice->currentOffer()->formats() : QStringList()},
-                {u"session_is_owner"_s, m_dataControlDevice->source() && m_dataControlDevice->source()->owner == session},
-            });
-    });
+void ClipboardPortal::activateBackendSession(const QDBusObjectPath& session)
+{
+    m_backend->authorizeSession(session, true);
+    m_backend->setSessionActive(session, true);
 }
 
 QDBusUnixFileDescriptor ClipboardPortal::SelectionRead(const QDBusObjectPath &session_handle, const QString &mime_type, const QDBusMessage &message)
@@ -262,34 +108,20 @@ QDBusUnixFileDescriptor ClipboardPortal::SelectionRead(const QDBusObjectPath &se
     qCDebug(XdgDesktopPortalKdeClipboard) << "    mime_type: " << mime_type;
 
     if (!isClipboardEnabledSession(session_handle)) {
-        auto error = message.createErrorReply(QDBusError::InvalidArgs, u"Not a clipboard enabled session"_s);
-        qCWarning(XdgDesktopPortalKdeClipboard) << error.errorMessage();
+        message.setDelayedReply(true);
+        QDBusMessage error = message.createErrorReply(QDBusError::InvalidArgs, u"Not a clipboard enabled session"_s);
         QDBusConnection::sessionBus().send(error);
-        return QDBusUnixFileDescriptor();
+        return {};
     }
 
-    const auto offer = m_dataControlDevice->currentOffer();
-    if (!offer || !offer->formats().contains(mime_type)) {
-        auto error = message.createErrorReply(QDBusError::InvalidArgs, u"requesting not offered format"_s);
-        qCWarning(XdgDesktopPortalKdeClipboard) << error.errorMessage();
-        return QDBusUnixFileDescriptor();
+    activateBackendSession(session_handle);
+    QString errorString;
+    auto fd = m_backend->requestRead(session_handle, mime_type, &errorString);
+    if (!fd.isValid()) {
+        message.setDelayedReply(true);
+        QDBusConnection::sessionBus().send(message.createErrorReply(QDBusError::Failed, errorString));
     }
-
-    int pipeFds[2];
-    if (pipe2(pipeFds, O_CLOEXEC) != 0) {
-        auto error = message.createErrorReply(QDBusError::Failed, u"Failed to create pipe"_s);
-        qCWarning(XdgDesktopPortalKdeClipboard) << error.errorMessage();
-        QDBusConnection::sessionBus().send(error);
-        return QDBusUnixFileDescriptor();
-    }
-    auto _ = qScopeGuard([pipeFds] {
-        close(pipeFds[0]);
-        close(pipeFds[1]);
-    });
-
-    auto dbusFd = QDBusUnixFileDescriptor(pipeFds[0]);
-    m_dataControlDevice->currentOffer()->receive(mime_type, pipeFds[1]);
-    return dbusFd;
+    return fd;
 }
 
 void ClipboardPortal::SetSelection(const QDBusObjectPath &session_handle, const QVariantMap &options)
@@ -302,74 +134,78 @@ void ClipboardPortal::SetSelection(const QDBusObjectPath &session_handle, const 
         qCWarning(XdgDesktopPortalKdeClipboard) << "Not a clipboard enabled session" << session_handle.path();
         return;
     }
-
-    auto mimeTypes = options.value(u"mime_types"_s).toStringList();
-    if (mimeTypes.empty()) {
-        m_dataControlDevice->setSource(nullptr);
+    activateBackendSession(session_handle);
+    const QStringList mimeTypes = options.value(u"mime_types"_s).toStringList();
+    if (mimeTypes.isEmpty()) {
+        qCWarning(XdgDesktopPortalKdeClipboard) << "SetSelection without mime_types";
         return;
     }
-
-    auto dataSource = std::make_unique<DataControlSource>(m_dataControlManager->create_data_source(), Session::getSession(session_handle.path()), mimeTypes);
-    connect(dataSource.get(), &DataControlSource::dataRequested, this, &ClipboardPortal::dataRequested);
-    m_dataControlDevice->setSource(std::move(dataSource));
-}
-
-void ClipboardPortal::dataRequested(const DataControlSource &source, const QString &mimeType, int fd)
-{
-    static uint transferSerialCounter = 0;
-    const uint transferSerial = transferSerialCounter++;
-    m_pendingTransfers.push_back({.serial = transferSerial, .fd = fd});
-    Q_EMIT SelectionTransfer(QDBusObjectPath(source.owner->handle()), mimeType, transferSerial);
+    const QString mime = mimeTypes.constFirst();
+    m_sessionMime.insert(session_handle.path(), mime);
+    uint serial = m_nextSerial++;
+    if (serial == 0) {
+        serial = m_nextSerial++;
+    }
+    m_serialMime.insert(serial, mime);
+    m_serialSession.insert(serial, session_handle.path());
+    Q_EMIT SelectionTransfer(session_handle, mime, serial);
 }
 
 QDBusUnixFileDescriptor ClipboardPortal::SelectionWrite(const QDBusObjectPath &session_handle, uint serial, const QDBusMessage &message)
 {
     qCDebug(XdgDesktopPortalKdeClipboard) << "SelectionWrite called with parameters:";
     qCDebug(XdgDesktopPortalKdeClipboard) << "    session_handle: " << session_handle.path();
-    qCDebug(XdgDesktopPortalKdeClipboard) << "    uint: " << serial;
+    qCDebug(XdgDesktopPortalKdeClipboard) << "    serial: " << serial;
 
     if (!isClipboardEnabledSession(session_handle)) {
-        auto error = message.createErrorReply(QDBusError::InvalidArgs, u"Not a clipboard enabled session"_s);
-        qCWarning(XdgDesktopPortalKdeClipboard) << error.errorMessage();
+        message.setDelayedReply(true);
+        QDBusMessage error = message.createErrorReply(QDBusError::InvalidArgs, u"Not a clipboard enabled session"_s);
         QDBusConnection::sessionBus().send(error);
-        return QDBusUnixFileDescriptor();
+        return {};
     }
 
-    auto transfer = std::ranges::find(m_pendingTransfers, serial, &Transfer::serial);
-    if (transfer == m_pendingTransfers.end()) {
-        auto error = message.createErrorReply(QDBusError::InvalidArgs, u"No pending transfer with this serial"_s);
-        qCWarning(XdgDesktopPortalKdeClipboard) << error.errorMessage() << serial;
-        QDBusConnection::sessionBus().send(error);
-        return QDBusUnixFileDescriptor();
+    activateBackendSession(session_handle);
+    if (m_serialSession.value(serial) != session_handle.path()) {
+        message.setDelayedReply(true);
+        QDBusConnection::sessionBus().send(message.createErrorReply(QDBusError::InvalidArgs, u"Unknown clipboard transfer serial"_s));
+        return {};
     }
-
-    return QDBusUnixFileDescriptor(transfer->fd);
+    const QString mime = m_serialMime.value(serial);
+    QString errorString;
+    auto fd = m_backend->beginWrite(session_handle, mime, serial, &errorString);
+    if (!fd.isValid()) {
+        message.setDelayedReply(true);
+        QDBusConnection::sessionBus().send(message.createErrorReply(QDBusError::Failed, errorString));
+    }
+    return fd;
 }
 
 void ClipboardPortal::SelectionWriteDone(const QDBusObjectPath &session_handle, uint serial, bool success, const QDBusMessage &message)
 {
     qCDebug(XdgDesktopPortalKdeClipboard) << "SelectionWriteDone called with parameters:";
     qCDebug(XdgDesktopPortalKdeClipboard) << "    session_handle: " << session_handle.path();
-    qCDebug(XdgDesktopPortalKdeClipboard) << "    uint: " << serial;
+    qCDebug(XdgDesktopPortalKdeClipboard) << "    serial: " << serial;
     qCDebug(XdgDesktopPortalKdeClipboard) << "    success: " << success;
 
     if (!isClipboardEnabledSession(session_handle)) {
-        auto error = message.createErrorReply(QDBusError::InvalidArgs, u"Not a clipboard enabled session"_s);
-        qCWarning(XdgDesktopPortalKdeClipboard) << error.errorMessage() << session_handle.path();
+        message.setDelayedReply(true);
+        QDBusMessage error = message.createErrorReply(QDBusError::InvalidArgs, u"Not a clipboard enabled session"_s);
         QDBusConnection::sessionBus().send(error);
         return;
     }
-
-    auto transfer = std::ranges::find(m_pendingTransfers, serial, &Transfer::serial);
-    if (transfer == m_pendingTransfers.end()) {
-        auto error = message.createErrorReply(QDBusError::InvalidArgs, u"No pending transfer with this serial"_s);
-        qCWarning(XdgDesktopPortalKdeClipboard) << error.errorMessage() << serial;
-        QDBusConnection::sessionBus().send(error);
+    activateBackendSession(session_handle);
+    if (m_serialSession.value(serial) != session_handle.path()) {
+        message.setDelayedReply(true);
+        QDBusConnection::sessionBus().send(message.createErrorReply(QDBusError::InvalidArgs, u"Unknown clipboard transfer serial"_s));
         return;
     }
-    close(transfer->fd);
-    m_pendingTransfers.erase(transfer);
+    QString errorString;
+    if (!m_backend->completeWrite(session_handle, serial, success, &errorString)) {
+        qCWarning(XdgDesktopPortalKdeClipboard) << "SelectionWriteDone failed:" << errorString;
+    } else {
+        m_serialMime.remove(serial);
+        m_serialSession.remove(serial);
+    }
 }
 
-#include "clipboard.moc"
 #include "moc_clipboard.cpp"

@@ -55,8 +55,8 @@ std::variant<BarrierFailureReason, QPair<QPoint, QPoint>> checkAndMakeBarrier(in
     }
     if (onRightEdge) {
         // Barriers on right/top edge will have a coordinate of just past the screen (on 1920 pixel wide screen at 0x0 1920)
-        // We send coordinates on the screen to KWin which is consistent with the other case which sends the coordinate
-        // of the first row/column of pixels
+        // We send coordinates on the screen which is consistent with the other case which sends the coordinate
+        // of the first row/column of pixels.
         --x1;
         --x2;
     }

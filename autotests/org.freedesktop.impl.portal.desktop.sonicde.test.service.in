@@ -1,0 +1,4 @@
+[D-BUS Service]
+Name=@PORTAL_SERVICE_NAME@
+Exec=@PORTAL_EXECUTABLE_NAME@ --replace --fixed-output Workspace
+Type=session

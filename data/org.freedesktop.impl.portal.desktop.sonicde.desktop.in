@@ -1,0 +1,6 @@
+[Desktop Entry]
+Type=Application
+Name=SonicDE Portal
+Exec=@CMAKE_INSTALL_FULL_LIBEXECDIR@/xdg-desktop-portal-sonicde
+NoDisplay=true
+Icon=kde

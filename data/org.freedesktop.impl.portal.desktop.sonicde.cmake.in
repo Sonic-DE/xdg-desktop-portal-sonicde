@@ -1,0 +1,4 @@
+[D-BUS Service]
+Name=org.freedesktop.impl.portal.desktop.sonicde
+Exec=@CMAKE_INSTALL_FULL_LIBEXECDIR@/xdg-desktop-portal-sonicde
+SystemdService=plasma-xdg-desktop-portal-sonicde.service

@@ -30,6 +30,7 @@ public:
         : QDBusAbstractAdaptor(parent)
     {
     }
+    static WallpaperLocation::Location locationFromSetOn(const QString& setOn, bool* ok);
 public Q_SLOTS:
     void SetWallpaperURI(const QDBusObjectPath &handle,
                          const QString &app_id,

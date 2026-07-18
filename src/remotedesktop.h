@@ -12,10 +12,15 @@
 #include <QDBusAbstractAdaptor>
 #include <QDBusObjectPath>
 #include <QDBusUnixFileDescriptor>
+#include <QHash>
 
 #include "screencast.h"
 
 class QDBusMessage;
+class X11Controller;
+class X11Input;
+class XEisMounter;
+class RemoteDesktopSession;
 
 class RemoteDesktopPortal : public QDBusAbstractAdaptor
 {
@@ -24,7 +29,7 @@ class RemoteDesktopPortal : public QDBusAbstractAdaptor
     Q_PROPERTY(uint version READ version CONSTANT)
     Q_PROPERTY(uint AvailableDeviceTypes READ AvailableDeviceTypes CONSTANT)
 public:
-    explicit RemoteDesktopPortal(QObject *parent);
+    explicit RemoteDesktopPortal(QObject* parent, X11Controller* controller = nullptr);
     ~RemoteDesktopPortal() override;
 
     enum DeviceType {
@@ -40,10 +45,7 @@ public:
     {
         return 2;
     }
-    uint AvailableDeviceTypes() const
-    {
-        return All;
-    };
+    uint AvailableDeviceTypes() const;
 
 public Q_SLOTS:
     uint CreateSession(const QDBusObjectPath &handle,
@@ -88,15 +90,21 @@ public Q_SLOTS:
     void NotifyTouchUp(const QDBusObjectPath &session_handle, const QVariantMap &options, uint slot);
 
     QDBusUnixFileDescriptor ConnectToEIS(const QDBusObjectPath &session_handle, const QString &app_id, const QVariantMap &options, const QDBusMessage &message);
+
+private:
+    RemoteDesktopSession* validSession(const QDBusObjectPath& handle, DeviceType capability) const;
+    XEisMounter* eisForSession(const QString& sessionPath);
+    X11Controller* m_controller = nullptr;
+    X11Input* m_input = nullptr;
+    QHash<QString, XEisMounter*> m_eisBySession;
 };
 Q_DECLARE_OPERATORS_FOR_FLAGS(RemoteDesktopPortal::DeviceTypes)
-
 
 class RemoteDesktopSession : public ScreenCastSession
 {
     Q_OBJECT
 public:
-    explicit RemoteDesktopSession(QObject *parent, const QString &appId, const QString &path);
+    explicit RemoteDesktopSession(QObject* parent, const QString& appId, const QString& path, X11Controller* controller = nullptr);
     ~RemoteDesktopSession() override;
 
     RemoteDesktopPortal::DeviceTypes deviceTypes() const;
@@ -113,6 +121,14 @@ public:
 
     void setEisCookie(int cookie);
     int eisCookie() const;
+    bool started() const
+    {
+        return m_started;
+    }
+    void setStarted(bool started)
+    {
+        m_started = started;
+    }
 
     SessionType type() const override
     {
@@ -122,9 +138,10 @@ public:
 private:
     bool m_screenSharingEnabled;
     bool m_clipboardEnabled;
-    RemoteDesktopPortal::DeviceTypes m_deviceTypes;
+    RemoteDesktopPortal::DeviceTypes m_deviceTypes = RemoteDesktopPortal::None;
     bool m_acquired = false;
     int m_cookie = 0;
+    bool m_started = false;
 };
 
 #endif // XDG_DESKTOP_PORTAL_KDE_REMOTEDESKTOP_H

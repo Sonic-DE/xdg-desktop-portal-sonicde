@@ -1,0 +1,9 @@
+[Unit]
+Description=SonicDE Xdg Desktop Portal (X11)
+PartOf=graphical-session.target
+
+[Service]
+ExecStart=@CMAKE_INSTALL_FULL_LIBEXECDIR@/xdg-desktop-portal-sonicde
+BusName=org.freedesktop.impl.portal.desktop.sonicde
+Slice=session.slice
+Restart=no

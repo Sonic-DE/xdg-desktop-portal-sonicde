@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.16)
+cmake_minimum_required(VERSION 3.21)
 
 set(CMAKE_C_STANDARD 99)
 
@@ -35,23 +35,16 @@ include(ECMQmlModule)
 
 find_package(Qt6 ${QT_MIN_VERSION} CONFIG REQUIRED COMPONENTS
     Core
-    Concurrent
     DBus
     PrintSupport
     QuickWidgets
     Widgets
-    WaylandClient
     Quick
     QuickControls2
     Qml
+    GuiPrivate
     Test
 )
-find_package(Qt6 ${QT_MIN_VERSION} CONFIG REQUIRED COMPONENTS WaylandClient)
-
-if (Qt6_VERSION VERSION_GREATER_EQUAL "6.10.0")
-    find_package(Qt6GuiPrivate ${REQUIRED_QT_VERSION} REQUIRED NO_MODULE)
-    find_package(Qt6PrintSupportPrivate ${REQUIRED_QT_VERSION} REQUIRED NO_MODULE)
-endif()
 
 find_package(KF6 ${KF6_MIN_VERSION} REQUIRED
     CoreAddons
@@ -69,27 +62,33 @@ find_package(KF6 ${KF6_MIN_VERSION} REQUIRED
     Crash
 )
 
-find_package(KWayland ${PROJECT_DEP_VERSION} REQUIRED)
-
-ecm_find_qmlmodule(org.kde.iconthemes 1.0)
-find_package(Wayland 1.15 REQUIRED COMPONENTS Client)
-find_package(PlasmaWaylandProtocols 1.7.0 REQUIRED)
-
-find_package(WaylandProtocols 1.25)
-set_package_properties(WaylandProtocols PROPERTIES
-    TYPE REQUIRED
-    PURPOSE "Collection of Wayland protocols that add functionality not available in the Wayland core protocol"
-    URL "https://gitlab.freedesktop.org/wayland/wayland-protocols/"
-)
+find_package(PkgConfig REQUIRED)
+pkg_check_modules(XCB REQUIRED IMPORTED_TARGET xcb)
+pkg_check_modules(XCB_COMPOSITE REQUIRED IMPORTED_TARGET xcb-composite)
+pkg_check_modules(XCB_DAMAGE REQUIRED IMPORTED_TARGET xcb-damage)
+pkg_check_modules(XCB_XFIXES REQUIRED IMPORTED_TARGET xcb-xfixes)
+pkg_check_modules(XCB_RANDR REQUIRED IMPORTED_TARGET xcb-randr)
+pkg_check_modules(XCB_SHM REQUIRED IMPORTED_TARGET xcb-shm)
+pkg_check_modules(XCB_XTEST REQUIRED IMPORTED_TARGET xcb-xtest)
+pkg_check_modules(XCB_XINPUT REQUIRED IMPORTED_TARGET xcb-xinput)
+pkg_check_modules(XCB_EWMH REQUIRED IMPORTED_TARGET xcb-ewmh)
+pkg_check_modules(XCB_IMAGE REQUIRED IMPORTED_TARGET xcb-image)
+pkg_check_modules(XCB_RENDER REQUIRED IMPORTED_TARGET xcb-render)
+pkg_check_modules(XCB_RENDERUTIL REQUIRED IMPORTED_TARGET xcb-renderutil)
+pkg_check_modules(XKB REQUIRED IMPORTED_TARGET xkbcommon)
+pkg_check_modules(XKB_X11 REQUIRED IMPORTED_TARGET xkbcommon-x11)
+pkg_check_modules(PIPEWIRE REQUIRED IMPORTED_TARGET libpipewire-0.3)
+pkg_check_modules(LIBEI REQUIRED IMPORTED_TARGET libei-1.0)
+pkg_check_modules(LIBEIS REQUIRED IMPORTED_TARGET libeis-1.0)
+add_feature_info(XCB XCB_FOUND "Required for X11 capture, registry, and input")
+add_feature_info(PIPEWIRE PIPEWIRE_FOUND "Required for PipeWire producer streams")
+add_feature_info(EIS LIBEIS_FOUND "Required for EIS input backend")
 
 find_package(KIOFuse)
 set_package_properties(KIOFuse PROPERTIES
     URL https://commits.kde.org/system/kio-fuse
     TYPE RUNTIME
     PURPOSE "Automatic mounting of remote URLs")
-
-pkg_check_modules(XKB IMPORTED_TARGET xkbcommon REQUIRED)
-add_feature_info(XKB XKB_FOUND "Required for converting keysyms into keycodes")
 
 ecm_setup_version(${PROJECT_VERSION}
     VARIABLE_PREFIX XDPK

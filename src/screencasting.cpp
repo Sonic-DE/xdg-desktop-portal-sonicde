@@ -5,196 +5,81 @@
 */
 
 #include "screencasting.h"
-#include "qwayland-zkde-screencast-unstable-v1.h"
-#include "screencast.h"
-#include "screencast_debug.h"
 
-#include <KWayland/Client/output.h>
-#include <KWayland/Client/plasmawindowmanagement.h>
-#include <KWayland/Client/registry.h>
-#include <QDebug>
-#include <QRect>
+#include <QSize>
 
-#include <QGuiApplication>
-#include <qpa/qplatformnativeinterface.h>
-
-using namespace KWayland::Client;
-
-class ScreencastingStreamPrivate : public QtWayland::zkde_screencast_stream_unstable_v1
-{
-public:
-    explicit ScreencastingStreamPrivate(ScreencastingStream *q)
-        : q(q)
-    {
-    }
-    ~ScreencastingStreamPrivate() override
-    {
-        close();
-    }
-
-    void zkde_screencast_stream_unstable_v1_created(uint32_t node) override
-    {
-        m_nodeid = node;
-        Q_EMIT q->created(node);
-    }
-
-    void zkde_screencast_stream_unstable_v1_closed() override
-    {
-        Q_EMIT q->closed();
-    }
-
-    void zkde_screencast_stream_unstable_v1_failed(const QString &error) override
-    {
-        Q_EMIT q->failed(error);
-    }
-
-    uint m_nodeid = 0;
-    QRect m_geometry;
-    QVariantMap metaData;
-    QPointer<ScreencastingStream> q;
-};
-
-ScreencastingStream::ScreencastingStream(QObject *parent)
+ScreencastingStream::ScreencastingStream(QObject* parent)
     : QObject(parent)
-    , d(new ScreencastingStreamPrivate(this))
+    , m_pipeWireStream(std::make_unique<PipeWireStream>())
 {
+    connect(m_pipeWireStream.get(), &PipeWireStream::created, this, &ScreencastingStream::created);
+    connect(m_pipeWireStream.get(), &PipeWireStream::failed, this, &ScreencastingStream::failed);
+    connect(m_pipeWireStream.get(), &PipeWireStream::closed, this, &ScreencastingStream::closed);
 }
 
-ScreencastingStream::~ScreencastingStream() = default;
+ScreencastingStream::~ScreencastingStream()
+{
+    closeStream();
+}
 
 quint32 ScreencastingStream::nodeid() const
 {
-    return d->m_nodeid;
+    return m_pipeWireStream ? m_pipeWireStream->nodeId() : 0;
 }
 
-QRect ScreencastingStream::geometry() const
+void ScreencastingStream::setGeometry(const QRect& rect)
 {
-    return d->m_geometry;
+    m_geometry = rect;
+    configurePipeWireStream();
 }
 
-QVariantMap ScreencastingStream::metaData() const
+void ScreencastingStream::setMetaData(const QVariantMap& m)
 {
-    return d->metaData;
+    m_metadata = m;
+    if (m_pipeWireStream) {
+        m_pipeWireStream->setMetadata(m_metadata);
+    }
 }
 
-class ScreencastingPrivate : public QtWayland::zkde_screencast_unstable_v1
+bool ScreencastingStream::start(PipeWireStream::FrameProvider provider)
 {
-public:
-    ScreencastingPrivate(Registry *registry, int id, int version, Screencasting *q)
-        : QtWayland::zkde_screencast_unstable_v1(*registry, id, version)
-        , q(q)
-    {
+    m_provider = std::move(provider);
+    configurePipeWireStream();
+
+    if (!m_pipeWireStream) {
+        return false;
     }
 
-    ScreencastingPrivate(::zkde_screencast_unstable_v1 *screencasting, Screencasting *q)
-        : QtWayland::zkde_screencast_unstable_v1(screencasting)
-        , q(q)
-    {
+    const bool started = m_pipeWireStream->start(m_provider);
+    if (!started) {
+        return false;
     }
+    return m_pipeWireStream->waitForReady();
+}
 
-    ~ScreencastingPrivate() override
-    {
-        destroy();
+void ScreencastingStream::pushFrame(PipeWireStream::Frame frame)
+{
+    if (!m_pipeWireStream) {
+        return;
     }
-
-    Screencasting *const q;
-};
-
-Screencasting::Screencasting(QObject *parent)
-    : QObject(parent)
-{
+    m_pipeWireStream->pushFrame(std::move(frame));
 }
 
-Screencasting::Screencasting(Registry *registry, int id, int version, QObject *parent)
-    : QObject(parent)
-    , d(new ScreencastingPrivate(registry, id, version, this))
+void ScreencastingStream::closeStream()
 {
-}
-
-Screencasting::~Screencasting() = default;
-
-ScreencastingStream *Screencasting::createOutputStream(QScreen *screen, CursorMode mode)
-{
-    auto stream = new ScreencastingStream(this);
-    stream->setObjectName(screen->name());
-
-    auto native = qGuiApp->platformNativeInterface();
-    auto *output = reinterpret_cast<wl_output *>(native->nativeResourceForScreen(QByteArrayLiteral("output"), screen));
-    if (!output) {
-        qCWarning(XdgDesktopPortalKdeScreenCast) << "Could not find a matching Wayland output for screen" << screen->name();
-        return nullptr;
+    if (m_pipeWireStream) {
+        m_pipeWireStream->close();
     }
-
-    stream->d->init(d->stream_output(output, mode));
-    stream->d->m_geometry = screen->geometry();
-    connect(screen, &QScreen::geometryChanged, stream, [stream](const QRect &geometry) {
-        stream->d->m_geometry = geometry;
-    });
-    stream->d->metaData = {
-        {QLatin1String("position"), screen->geometry().topLeft()},
-        {QLatin1String("size"), screen->size()},
-        {QLatin1String("source_type"), static_cast<uint>(ScreenCastPortal::Monitor)},
-    };
-    return stream;
 }
 
-ScreencastingStream *Screencasting::createWindowStream(const KWayland::Client::PlasmaWindow *window, CursorMode mode)
+void ScreencastingStream::configurePipeWireStream()
 {
-    auto stream = new ScreencastingStream(this);
-    stream->d->init(d->stream_window(QString::fromUtf8(window->uuid()), mode));
-    stream->d->m_geometry = window->geometry();
-    connect(window, &KWayland::Client::PlasmaWindow::geometryChanged, stream, [window, stream] {
-        stream->d->m_geometry = window->geometry();
-    });
-    stream->d->metaData = {{QLatin1String("source_type"), static_cast<uint>(ScreenCastPortal::Window)}};
-    return stream;
-}
-
-ScreencastingStream *Screencasting::createRegionStream(const QRect &g, qreal scale, CursorMode mode)
-{
-    auto stream = new ScreencastingStream(this);
-    stream->d->init(d->stream_region(g.x(), g.y(), g.width(), g.height(), wl_fixed_from_double(scale), mode));
-    stream->d->m_geometry = g;
-    stream->d->metaData = {
-        {QLatin1String("size"), g.size()},
-        {QLatin1String("source_type"), static_cast<uint>(ScreenCastPortal::Monitor)},
-    };
-    return stream;
-}
-
-ScreencastingStream *
-Screencasting::createVirtualOutputStream(const QString &name, const QString &description, const QSize &s, qreal scale, Screencasting::CursorMode mode)
-{
-    auto stream = new ScreencastingStream(this);
-    if (d->version() >= ZKDE_SCREENCAST_UNSTABLE_V1_STREAM_VIRTUAL_OUTPUT_WITH_DESCRIPTION_SINCE_VERSION) {
-        stream->d->init(d->stream_virtual_output_with_description(name, description, s.width(), s.height(), wl_fixed_from_double(scale), mode));
-    } else {
-        stream->d->init(d->stream_virtual_output(name, s.width(), s.height(), wl_fixed_from_double(scale), mode));
+    if (!m_pipeWireStream) {
+        return;
     }
-    connect(qGuiApp, &QGuiApplication::screenAdded, stream, [stream, name](const QScreen *screen) {
-        // KWin adds "Virtual-" to virtual screen naems
-        if (screen->name() == QLatin1StringView("Virtual-") + name) {
-            stream->d->m_geometry = screen->geometry();
-            connect(screen, &QScreen::geometryChanged, stream, [stream](const QRect &geometry) {
-                stream->d->m_geometry = geometry;
-            });
-        }
-    });
-    stream->d->metaData = {
-        {QLatin1String("size"), s},
-        {QLatin1String("source_type"), static_cast<uint>(ScreenCastPortal::Virtual)},
-    };
-    return stream;
-}
-
-void Screencasting::setup(::zkde_screencast_unstable_v1 *screencasting)
-{
-    d.reset(new ScreencastingPrivate(screencasting, this));
-}
-
-void Screencasting::destroy()
-{
-    d.reset(nullptr);
+    const QSize size = m_geometry.isValid() ? m_geometry.size() : QSize(1, 1);
+    m_pipeWireStream->configure(size, PipeWireStream::PixelFormat::RGBx, 30, false);
+    m_pipeWireStream->setMetadata(m_metadata);
 }
 
 #include "moc_screencasting.cpp"

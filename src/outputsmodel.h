@@ -7,12 +7,13 @@
 #pragma once
 
 #include <QAbstractListModel>
-#include <QScreen>
+#include <QRect>
 #include <QSet>
 #include <QUrl>
 #include <QtQmlIntegration/qqmlintegration.h>
 
 class QTemporaryFile;
+class QScreen;
 
 class Output
 {
@@ -23,28 +24,21 @@ public:
         Monitor,
         Television,
         Workspace,
-        Virtual,
         Region,
     };
 
+    Output() = default;
     Output(OutputType outputType,
-           QScreen *screen,
-           const QString &display,
-           const QString &uniqueId,
-           const QString &name,
-           const std::shared_ptr<QTemporaryFile> &temporaryFile)
+        const QString& display,
+        const QString& uniqueId,
+        const QString& name,
+        const std::shared_ptr<QTemporaryFile>& temporaryFile)
         : m_outputType(outputType)
-        , m_screen(screen)
         , m_display(display)
         , m_uniqueId(uniqueId)
         , m_name(name)
         , m_temporaryFile(temporaryFile)
     {
-    }
-
-    QScreen *screen() const
-    {
-        return m_screen;
     }
 
     QString name() const
@@ -71,6 +65,77 @@ public:
         return m_outputType;
     }
 
+    int x() const
+    {
+        return m_nativeGeometry.x();
+    }
+    int y() const
+    {
+        return m_nativeGeometry.y();
+    }
+    int width() const
+    {
+        return m_nativeGeometry.width();
+    }
+    int height() const
+    {
+        return m_nativeGeometry.height();
+    }
+    int w() const
+    {
+        return m_nativeGeometry.width();
+    }
+    int h() const
+    {
+        return m_nativeGeometry.height();
+    }
+
+    void setIsSynthetic(bool s)
+    {
+        m_synthetic = s;
+    }
+    void setName(const QString& n)
+    {
+        m_name = n;
+    }
+    void setUniqueId(const QString& u)
+    {
+        m_uniqueId = u;
+    }
+    void setWidth(int w)
+    {
+        m_nativeGeometry.setWidth(w);
+    }
+    void setHeight(int h)
+    {
+        m_nativeGeometry.setHeight(h);
+    }
+    void setX(int x)
+    {
+        m_nativeGeometry.setX(x);
+    }
+    void setY(int y)
+    {
+        m_nativeGeometry.setY(y);
+    }
+    void setOutputType(OutputType t)
+    {
+        m_outputType = t;
+    }
+    void setDisplay(const QString& d)
+    {
+        m_display = d;
+    }
+    void setGeometry(const QRect& g)
+    {
+        m_nativeGeometry = g;
+    }
+
+    QRect geometry() const
+    {
+        return m_nativeGeometry;
+    }
+
     /*! Returns the image associated with the output (may be isNull() if it is unknown)*/
     [[nodiscard]] QUrl imageUrl() const
     {
@@ -84,13 +149,14 @@ public:
     }
 
 private:
-    OutputType m_outputType;
-    QScreen *m_screen = nullptr;
+    OutputType m_outputType = Unknown;
     QString m_display;
     QString m_uniqueId;
     QString m_name;
+    QRect m_nativeGeometry;
     QUrl m_image;
     std::shared_ptr<QTemporaryFile> m_temporaryFile;
+    bool m_synthetic = false;
 };
 
 class OutputsModel : public QAbstractListModel
@@ -99,13 +165,12 @@ class OutputsModel : public QAbstractListModel
     QML_ELEMENT
     QML_UNCREATABLE("OutputsModel is passed in through the root properties")
     Q_PROPERTY(bool hasSelection READ hasSelection NOTIFY hasSelectionChanged)
-    Q_PROPERTY(qsizetype outputCount READ outputCount CONSTANT)
-    Q_PROPERTY(qsizetype syntheticCount READ syntheticCount CONSTANT)
+    Q_PROPERTY(qsizetype outputCount READ outputCount NOTIFY countChanged)
+    Q_PROPERTY(qsizetype syntheticCount READ syntheticCount NOTIFY countChanged)
 public:
     enum Option {
         None = 0,
         WorkspaceIncluded = 0x1,
-        VirtualIncluded = 0x2,
         RegionIncluded = 0x4,
         OutputsExcluded = 0x8
     };
@@ -137,12 +202,6 @@ public:
         return !m_selectedRows.isEmpty();
     }
 
-    static QString virtualScreenIdForApp(const QString &appId);
-
-    /*
-        \brief used for finding indexes based on whether they intersect with a given screen geometry. IOW: if the window is visible on that screen
-        Mind that the call signature must be kept in sync with FilteredWindowModel! We invoke it on both the output and window model.
-    */
     Q_INVOKABLE [[nodiscard]] bool geometryIntersects(const QModelIndex &index, const QRect &geometry) const
     {
         if (!checkIndex(index, CheckIndexOption::IndexIsValid)) {
@@ -152,38 +211,23 @@ public:
         if (data(index, IsSyntheticRole).toBool()) {
             return false;
         }
-        // An intersection is actually not called for here.
-        // In theory two outputs can overlap partially, so let's not look for intersection but equality.
         return data(index, GeometryRole).toRect() == geometry;
     }
 
-    [[nodiscard]] qsizetype outputCount() const
-    {
-        return std::ranges::count_if(m_outputs, [](const auto &output) {
-            return !output.isSynthetic();
-        });
-    }
-
-    [[nodiscard]] qsizetype syntheticCount() const
-    {
-        return std::ranges::count_if(m_outputs, [](const Output &output) {
-            return output.isSynthetic();
-        });
-    }
+    [[nodiscard]] qsizetype outputCount() const;
+    [[nodiscard]] qsizetype syntheticCount() const;
 
 public Q_SLOTS:
     void clearSelection();
 
 Q_SIGNALS:
     void hasSelectionChanged();
-
-private Q_SLOTS:
-    void onOutputsChanged();
+    void countChanged();
 
 private:
     QList<Output> m_outputs;
     QSet<quint32> m_selectedRows;
-    std::unique_ptr<class OutputOrder> m_outputOrder;
+    QStringList m_sourceOrder;
 };
 
 Q_DECLARE_OPERATORS_FOR_FLAGS(OutputsModel::Options)

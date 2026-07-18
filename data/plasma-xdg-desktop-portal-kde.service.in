@@ -1,7 +1,6 @@
 [Unit]
-Description=Xdg Desktop Portal For KDE
+Description=Xdg Desktop Portal For KDE/SonicDE (X11)
 PartOf=graphical-session.target
-After=plasma-core.target
 
 [Service]
 ExecStart=@CMAKE_INSTALL_FULL_LIBEXECDIR@/xdg-desktop-portal-kde

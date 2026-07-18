@@ -28,7 +28,6 @@
 #include <KIO/MimeTypeFinderJob>
 #include <KLocalizedString>
 #include <KSycoca>
-#include <KWaylandExtras>
 #include <KWindowSystem>
 
 using namespace Qt::StringLiterals;
@@ -132,15 +131,8 @@ void AppChooserDialog::onApplicationSelected(const QString &desktopFile, const b
         QProcess::startDetached(QStringLiteral(KBUILDSYCOCA_EXENAME));
     }
 
-    if (KWindowSystem::isPlatformWayland()) {
-        auto tokenFuture = KWaylandExtras::xdgActivationToken(m_theDialog, m_selectedApplication);
-        tokenFuture.then(this, [this](const QString &token) {
-            m_activationToken = token;
-            accept();
-        });
-    } else {
-        accept();
-    }
+    Q_UNUSED(KWindowSystem::isPlatformX11());
+    accept();
 }
 
 void AppChooserDialog::onOpenDiscover()
