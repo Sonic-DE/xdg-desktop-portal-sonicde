@@ -22,7 +22,7 @@ namespace {
 constexpr int XKeycodeOffset = 8;
 constexpr int XKeycodeMin = 8;
 constexpr int XKeycodeMax = 255;
-constexpr int WheelStep = 120;
+constexpr int WheelStep = 15;
 
 struct XcbErrorDeleter {
     void operator()(xcb_generic_error_t* error) const
@@ -88,7 +88,7 @@ int buttonForAxis(Qt::Orientation axis, int direction)
     if (axis == Qt::Vertical) {
         return direction > 0 ? 4 : 5;
     }
-    return direction > 0 ? 6 : 7;
+    return direction > 0 ? 7 : 6;
 }
 }
 
