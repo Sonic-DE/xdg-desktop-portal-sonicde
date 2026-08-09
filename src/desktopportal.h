@@ -10,6 +10,7 @@
 #define XDG_DESKTOP_PORTAL_KDE_DESKTOP_PORTAL_H
 
 #include <QDBusContext>
+#include <QDBusServiceWatcher>
 #include <QObject>
 #include <QString>
 
@@ -66,6 +67,7 @@ private:
     ClipboardPortal* m_clipboard = nullptr;
     QString m_serviceName;
     ScreenSelectionProvider* m_selectionProvider = nullptr;
+    QDBusServiceWatcher m_frontendWatcher;
 };
 
 #endif // XDG_DESKTOP_PORTAL_KDE_DESKTOP_PORTAL_H
