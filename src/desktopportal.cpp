@@ -8,6 +8,11 @@
 
 #include "desktopportal.h"
 #include "desktopportal_debug.h"
+#include "session.h"
+
+#include <QDBusConnection>
+#include <QDBusServiceWatcher>
+#include <QGuiApplication>
 
 #include "access.h"
 #include "account.h"
@@ -29,8 +34,6 @@
 #include "usb.h"
 #include "wallpaper.h"
 #include "x11portalbootstrap.h"
-
-#include <QGuiApplication>
 
 namespace {
 bool isSupportedDesktop()
@@ -61,6 +64,7 @@ DesktopPortal::DesktopPortal(PortalBootstrap* bootstrap, const QString& serviceN
     , m_usb(new UsbPortal(this))
     , m_serviceName(serviceName)
     , m_selectionProvider(selectionProvider ? selectionProvider : new DialogScreenSelectionProvider(this))
+    , m_frontendWatcher(QStringLiteral("org.freedesktop.portal.Desktop"), QDBusConnection::sessionBus(), QDBusServiceWatcher::WatchForUnregistration)
 {
     if (isSupportedDesktop() && QGuiApplication::platformName() == QLatin1String("xcb")) {
         QObject* context = parent ? parent : this;
@@ -75,6 +79,11 @@ DesktopPortal::DesktopPortal(PortalBootstrap* bootstrap, const QString& serviceN
         m_wallpaper = new WallpaperPortal(context);
     }
     Q_UNUSED(bootstrap);
+
+    // Fail-safe: close all sessions if the portal frontend disappears without closing them.
+    connect(&m_frontendWatcher, &QDBusServiceWatcher::serviceUnregistered, this, [] {
+        Session::closeAll();
+    });
 }
 
 #include "moc_desktopportal.cpp"
