@@ -85,6 +85,12 @@ int main(int argc, char *argv[])
         qCCritical(XdgDesktopPortalKde) << "Failed to register" << serviceName << "service";
         return 1;
     }
+    QObject::connect(sessionBus.interface(), &QDBusConnectionInterface::serviceUnregistered, &a, [serviceName](const QString &name) {
+        if (name == serviceName) {
+            qCDebug(XdgDesktopPortalKde) << "Lost name" << serviceName << ". Exiting";
+            QCoreApplication::quit();
+        }
+    });
     desktopPortal = std::make_unique<DesktopPortal>(&bootstrap, serviceName);
     if (!sessionBus.registerObject(QString(objectPath), desktopPortal.get(), QDBusConnection::ExportAdaptors)) {
         qCCritical(XdgDesktopPortalKde) << "Failed to register desktop portal at" << objectPath;
