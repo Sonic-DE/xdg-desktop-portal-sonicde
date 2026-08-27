@@ -69,7 +69,7 @@ endforeach()
 add_executable(screencastsessiontest screencastsessiontest.cpp)
 target_include_directories(screencastsessiontest PRIVATE ${CMAKE_SOURCE_DIR}/src)
 target_link_libraries(screencastsessiontest PRIVATE
-    xdg-desktop-portal-kde-backend Qt::Test Qt::Widgets Qt::DBus KF6::StatusNotifierItem PkgConfig::PIPEWIRE
+    xdg-desktop-portal-kde-backend Qt::Test Qt::Widgets Qt::DBus KF6::StatusNotifierItem KF6::I18n PkgConfig::PIPEWIRE
 )
 find_program(DBUS_RUN_SESSION_EXECUTABLE dbus-run-session)
 if(DBUS_RUN_SESSION_EXECUTABLE)

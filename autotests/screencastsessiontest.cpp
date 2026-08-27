@@ -4,6 +4,9 @@
 #include "remotedesktop.h"
 #include "remotedesktopdialog.h"
 #include "screencast.h"
+#include "utils.h"
+
+#include <KLocalizedString>
 
 #include <QAction>
 #include <QDBusConnection>
@@ -66,7 +69,8 @@ private Q_SLOTS:
         QFETCH(uint, sourceType);
         QFETCH(QString, overlay);
         QFETCH(int, streamCount);
-        auto session = new InspectableScreenCastSession(nullptr, {}, QStringLiteral("/test/screencast"));
+        const QString appId = QStringLiteral("org.sonicde.PortalIndicatorTest");
+        auto session = new InspectableScreenCastSession(nullptr, appId, QStringLiteral("/test/screencast"));
         QVERIFY(session->isValid());
         std::vector<std::unique_ptr<ScreencastingStream>> streams;
         for (int i = 0; i < streamCount; ++i) {
@@ -83,7 +87,8 @@ private Q_SLOTS:
         QCOMPARE(indicator->status(), KStatusNotifierItem::Active);
         QCOMPARE(indicator->iconName(), QStringLiteral("media-record"));
         QCOMPARE(indicator->overlayIconName(), overlay);
-        QVERIFY(!indicator->toolTipSubTitle().isEmpty());
+        QCOMPARE(indicator->toolTipSubTitle(),
+            i18nc("@info:tooltip %1 the app that receives the screencast", "Sharing contents to %1", Utils::applicationName(appId)));
         session->showStatusNotifier();
         QCOMPARE(session->indicator(), indicator.data());
 
