@@ -26,6 +26,8 @@ set(_x11_unit_tests
     xeismountertest
     x11clipboardprotocoltest
     portalhelperstest
+    filechooserparenttest
+    usbportaltest
 )
 
 foreach(_test IN LISTS _x11_unit_tests)
@@ -35,6 +37,7 @@ foreach(_test IN LISTS _x11_unit_tests)
             Qt::Test
             Qt::Core
             Qt::Gui
+            Qt::Widgets
             Qt::DBus
             Qt::Qml
             xdg-desktop-portal-kde-backend
@@ -51,6 +54,13 @@ foreach(_test IN LISTS _x11_unit_tests)
     target_include_directories(${_test} PRIVATE ${CMAKE_SOURCE_DIR}/src)
     set_tests_properties(${_test} PROPERTIES LABELS "unit")
 endforeach()
+
+set_tests_properties(usbportaltest PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=xcb;QML_IMPORT_PATH=$<TARGET_FILE_DIR:usbportaltest>;QML2_IMPORT_PATH=$<TARGET_FILE_DIR:usbportaltest>"
+)
+target_link_libraries(usbportaltest xdg-desktop-portal-kde-backendplugin)
+set_tests_properties(filechooserparenttest PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=xcb")
+target_link_libraries(filechooserparenttest Qt::Widgets KF6::ConfigCore KF6::KIOFileWidgets)
 
 set(_test_portal_prefix ${CMAKE_CURRENT_BINARY_DIR}/test-prefix)
 set(_test_portal_dir ${_test_portal_prefix}/share/xdg-desktop-portal/portals)
