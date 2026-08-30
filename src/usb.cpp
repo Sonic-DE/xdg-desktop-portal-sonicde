@@ -55,9 +55,9 @@ void UsbPortal::AcquireDevices(const QDBusObjectPath &handle,
     std::ranges::transform(devices, std::back_inserter(deviceList), buildDevice);
 
     auto dialog = new QuickDialog;
+    dialog->create(u"UsbDialog"_s, {{u"app"_s, Utils::applicationName(app_id)}, {u"devices"_s, QVariant::fromValue(deviceList)}});
     Utils::setParentWindow(dialog->windowHandle(), parent_window);
     Request::makeClosableDialogRequest(handle, dialog);
-    dialog->create(u"UsbDialog"_s, {{u"app"_s, Utils::applicationName(app_id)}, {u"devices"_s, QVariant::fromValue(deviceList)}});
 
     delayReply(message, dialog, this, [dialog](DialogResult result) -> QVariantList {
         if (result == DialogResult::Rejected) {
