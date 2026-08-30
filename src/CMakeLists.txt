@@ -248,6 +248,7 @@ function(add_xdg_desktop_portal_exec _target _service _object_path _desktop_file
         QDPSONICDE_DESKTOP_FILE_LITERAL="${_desktop_file}")
     target_link_libraries(${_target} PRIVATE
         xdg-desktop-portal-kde-backend
+        xdg-desktop-portal-kde-backendplugin
         Qt::Core
         Qt::DBus
         Qt::Gui

@@ -19,7 +19,7 @@
 void Utils::setParentWindow(QWidget *w, const QString &parent_window)
 {
     if (parent_window.startsWith(QLatin1String("x11:"))) {
-        w->setAttribute(Qt::WA_NativeWindow, true);
+        w->winId(); // Ensure windowHandle() exists before assigning its external parent.
         setParentWindow(w->windowHandle(), parent_window);
     }
 }
@@ -27,6 +27,10 @@ void Utils::setParentWindow(QWidget *w, const QString &parent_window)
 void Utils::setParentWindow(QWindow *w, const QString &parent_window)
 {
     if (parent_window.startsWith(QLatin1String("x11:"))) {
+        if (!w) {
+            qWarning() << "Cannot set transient parent: dialog window handle is null (QML dialog failed to load?)";
+            return;
+        }
         KWindowSystem::setMainWindow(w, QStringView(parent_window).mid(4).toULongLong(nullptr, 16));
     }
 }
