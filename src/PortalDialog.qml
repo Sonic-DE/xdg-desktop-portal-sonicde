@@ -11,7 +11,9 @@ import QtQuick.Controls as QQC2
 import QtQuick.Layouts
 import QtQuick.Templates as T
 import org.kde.kirigami as Kirigami
-import Qt5Compat.GraphicalEffects
+import QtQuick.Effects
+
+pragma ComponentBehavior: Bound
 
 Kirigami.AbstractApplicationWindow {
     id: root
@@ -165,14 +167,13 @@ Kirigami.AbstractApplicationWindow {
                 implicitHeight: Math.min(Screen.height, control.implicitHeight + 2 * Kirigami.Units.gridUnit)
 
                 // shadow
-                RectangularGlow {
+                RectangularShadow {
                     id: glow
                     anchors.topMargin: 1
                     anchors.fill: parent
-                    cached: true
-                    glowRadius: 2
-                    cornerRadius: Kirigami.Units.gridUnit
-                    spread: 0.1
+                    blur: 2
+                    radius: Kirigami.Units.gridUnit
+                    spread: 0.2
                     color: Qt.rgba(0, 0, 0, 0.4)
                 }
             }
@@ -182,7 +183,7 @@ Kirigami.AbstractApplicationWindow {
             id: control
             anchors.fill: Kirigami.Settings.isMobile ? undefined : parent
             anchors.centerIn: Kirigami.Settings.isMobile ? parent : undefined
-            anchors.margins: Kirigami.Settings.isMobile ? glow.cornerRadius : 0
+            anchors.margins: Kirigami.Settings.isMobile ? glow.radius : 0
             topPadding: 0
             bottomPadding: 0
             rightPadding: 0
@@ -298,7 +299,7 @@ Kirigami.AbstractApplicationWindow {
                     id: contentComponent
 
                     QQC2.Control {
-                        topPadding: contentPadding ? root.edgeSpacing : undefined
+                        topPadding: root.contentPadding ? root.edgeSpacing : undefined
                         bottomPadding: topPadding
                         leftPadding: topPadding
                         rightPadding: topPadding
