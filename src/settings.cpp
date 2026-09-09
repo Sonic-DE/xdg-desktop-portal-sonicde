@@ -157,25 +157,25 @@ static VirtualKeyboardState queryVirtualKeyboardState()
 
 static bool groupMatches(const QString &group, const QStringList &patterns)
 {
-    return std::any_of(patterns.cbegin(), patterns.cend(), [&group](const auto &pattern) {
-        if (pattern.isEmpty()) {
-            return true;
-        }
+    return patterns.empty() || std::ranges::any_of(patterns, [&group](const auto &pattern) {
+               if (pattern.isEmpty()) {
+                   return true;
+               }
 
-        if (pattern == group) {
-            return true;
-        }
+               if (pattern == group) {
+                   return true;
+               }
 
-        if (pattern.startsWith(group)) {
-            return true;
-        }
+               if (pattern.startsWith(group)) {
+                   return true;
+               }
 
-        if (pattern.endsWith(QLatin1Char('*')) && group.startsWith(pattern.left(pattern.length() - 1))) {
-            return true;
-        }
+               if (pattern.endsWith(QLatin1Char('*')) && group.startsWith(pattern.left(pattern.length() - 1))) {
+                   return true;
+               }
 
-        return false;
-    });
+               return false;
+           });
 }
 
 class VirtualKeyboardSettings : public SettingsModule
@@ -216,6 +216,9 @@ public:
 
     QVariant read(const QString &group, const QString &key) final
     {
+        if (group != this->group()) {
+            return {};
+        }
         return readAll({group}).value(this->group()).value(key);
     }
 };
@@ -249,6 +252,9 @@ public:
 
     QVariant read(const QString &group, const QString &key) final
     {
+        if (group != this->group()) {
+            return {};
+        }
         return readAll({group}).value(this->group()).value(key);
     }
 };
@@ -610,8 +616,9 @@ QDBusVariant SettingsPortal::Read(const QString &group, const QString &key)
         QDBusConnection::sessionBus().send(reply);
     };
 
-    auto setting = std::ranges::find(m_settings, group, [](const auto &setting) {
-        return setting->group();
+    auto setting = std::ranges::find_if(m_settings, [&group](const auto &setting) {
+        const QString namespaceRoot = setting->group();
+        return group == namespaceRoot || group.startsWith(namespaceRoot + QLatin1Char('.'));
     });
     if (setting == std::ranges::end(m_settings)) {
         qCWarning(XdgDesktopPortalKdeSettings) << "Namespace " << group << " is not supported";

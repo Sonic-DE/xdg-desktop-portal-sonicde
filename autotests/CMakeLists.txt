@@ -16,6 +16,16 @@ set_tests_properties(servicereplacementtest PROPERTIES
     TIMEOUT 90
 )
 
+add_test(NAME settingsportaltest
+    COMMAND python3 -B ${CMAKE_CURRENT_SOURCE_DIR}/settingsportaltest.py
+        $<TARGET_FILE:xdg-desktop-portal-sonicde> $<TARGET_FILE:xdg-desktop-portal-kde>
+)
+set_tests_properties(settingsportaltest PROPERTIES
+    LABELS "integration"
+    SKIP_RETURN_CODE 77
+    TIMEOUT 90
+)
+
 add_test(
     NAME colorschemetest
     COMMAND python3 ${CMAKE_CURRENT_SOURCE_DIR}/colorschemetest.py
