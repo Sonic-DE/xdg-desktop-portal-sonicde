@@ -17,9 +17,9 @@ import unittest
 from gi.repository import Gio, GLib
 
 
-class ServiceReplacementTest(unittest.TestCase):
+class IsolatedBackendTest(unittest.TestCase):
     def setUp(self):
-        temporary = tempfile.TemporaryDirectory(prefix="xdp-service-replacement-")
+        temporary = tempfile.TemporaryDirectory(prefix="xdp-backend-test-")
         self.addCleanup(temporary.cleanup)
         self.environment = os.environ.copy()
         for variable in ("XDG_CONFIG_HOME", "XDG_CACHE_HOME", "XDG_DATA_HOME", "XDG_RUNTIME_DIR"):
@@ -106,6 +106,7 @@ class ServiceReplacementTest(unittest.TestCase):
             time.sleep(0.02)
         self.fail(f"Backend did not acquire {service}")
 
+class ServiceReplacementTest(IsolatedBackendTest):
     def test_replacement_exits_only_the_old_owner(self):
         services = ["org.freedesktop.impl.portal.desktop.sonicde", "org.freedesktop.impl.portal.desktop.kde"]
         processes = [self.launch(executable) for executable in EXECUTABLES]
