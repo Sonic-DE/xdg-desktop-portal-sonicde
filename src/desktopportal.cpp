@@ -59,7 +59,10 @@ DesktopPortal::DesktopPortal(PortalBootstrap* bootstrap, const QString& serviceN
     , m_fileChooser(new FileChooserPortal(this))
     , m_inhibit(new InhibitPortal(this))
     , m_print(new PrintPortal(this))
-    , m_settings(new SettingsPortal(this))
+    , m_settings(new SettingsPortal(this,
+                                    [this](const QDBusError &error) {
+                                        sendErrorReply(error.name(), error.message());
+                                    }))
     , m_dynamicLauncher(new DynamicLauncherPortal(this))
     , m_usb(new UsbPortal(this))
     , m_serviceName(serviceName)

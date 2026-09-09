@@ -3,8 +3,7 @@ ecm_add_tests(
 
     LINK_LIBRARIES Qt::Test Qt::Gui
 )
-target_sources(xdgshortcuttest PRIVATE ${CMAKE_SOURCE_DIR}/src/xdgshortcut.cpp ${CMAKE_SOURCE_DIR}/src/xdgshortcut.h)
-target_link_libraries(xdgshortcuttest Qt::GuiPrivate)
+target_link_libraries(xdgshortcuttest Qt::GuiPrivate xdg-desktop-portal-kde-backend)
 
 add_test(NAME servicereplacementtest
     COMMAND python3 ${CMAKE_CURRENT_SOURCE_DIR}/servicereplacementtest.py
@@ -36,7 +35,7 @@ set_tests_properties(colorschemetest PROPERTIES
     LABELS "unit"
 )
 
-ecm_add_test(inputcapturebarriertest.cpp ${CMAKE_SOURCE_DIR}/src/inputcapturebarrier.cpp TEST_NAME inputcapturebarriertest LINK_LIBRARIES Qt::Test Qt::Gui)
+ecm_add_test(inputcapturebarriertest.cpp TEST_NAME inputcapturebarriertest LINK_LIBRARIES xdg-desktop-portal-kde-backend Qt::Test Qt::Gui)
 
 # Pure unit tests for the X11 replacement components
 set(_x11_unit_tests
@@ -88,6 +87,22 @@ if(DBUS_RUN_SESSION_EXECUTABLE)
     )
     set_tests_properties(screencastsessiontest PROPERTIES
         ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
+        LABELS "unit"
+        TIMEOUT 30
+    )
+endif()
+
+add_executable(settingsportaltest settingsportaltest.cpp)
+target_link_libraries(settingsportaltest PRIVATE
+    xdg-desktop-portal-kde-backend Qt::Test Qt::DBus Qt::Widgets KF6::ConfigCore
+)
+if(DBUS_RUN_SESSION_EXECUTABLE)
+    # Keep the existing Python integration test named settingsportaltest.
+    add_test(NAME settingsportalunittest
+        COMMAND ${DBUS_RUN_SESSION_EXECUTABLE} -- $<TARGET_FILE:settingsportaltest>
+    )
+    set_tests_properties(settingsportalunittest PROPERTIES
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen;DISPLAY=invalid-display"
         LABELS "unit"
         TIMEOUT 30
     )
