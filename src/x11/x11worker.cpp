@@ -30,7 +30,7 @@ public:
     int defaultScreen = 0;
     xcb_screen_t* screen = nullptr;
     QSocketNotifier* notifier = nullptr;
-    QTimer* refreshTimer = nullptr;
+    QTimer* windowRefreshTimer = nullptr;
     std::unique_ptr<X11Capture> capture;
     std::map<QByteArray, xcb_atom_t> atoms;
 
@@ -47,6 +47,7 @@ public:
     bool compositeAvailable = false;
     bool damageAvailable = false;
     bool randrAvailable = false;
+    uint8_t randrFirstEvent = 0;
     bool xi2Available = false;
 };
 
@@ -225,13 +226,13 @@ static QList<X11Types::WindowDescriptor> buildWindowList(xcb_connection_t* c, xc
 static QList<X11Types::OutputDescriptor> queryRandROutputs(xcb_connection_t* c, xcb_window_t root)
 {
     QList<X11Types::OutputDescriptor> out;
-    xcb_randr_get_screen_resources_cookie_t srck = xcb_randr_get_screen_resources(c, root);
-    xcb_randr_get_screen_resources_reply_t* src = xcb_randr_get_screen_resources_reply(c, srck, nullptr);
+    xcb_randr_get_screen_resources_current_cookie_t srck = xcb_randr_get_screen_resources_current(c, root);
+    xcb_randr_get_screen_resources_current_reply_t* src = xcb_randr_get_screen_resources_current_reply(c, srck, nullptr);
     if (!src) {
         return out;
     }
-    int len = xcb_randr_get_screen_resources_outputs_length(src);
-    xcb_randr_output_t* outputs = xcb_randr_get_screen_resources_outputs(src);
+    int len = xcb_randr_get_screen_resources_current_outputs_length(src);
+    xcb_randr_output_t* outputs = xcb_randr_get_screen_resources_current_outputs(src);
     for (int i = 0; i < len; ++i) {
         X11Types::OutputDescriptor d;
         xcb_randr_get_output_info_cookie_t ck = xcb_randr_get_output_info(c, outputs[i], XCB_CURRENT_TIME);
@@ -330,6 +331,9 @@ void X11Worker::initialize()
     {
         const auto* xc = xcb_get_extension_data(d->connection, &xcb_randr_id);
         d->randrAvailable = xc && xc->present;
+        if (d->randrAvailable) {
+            d->randrFirstEvent = xc->first_event;
+        }
     }
     {
         const auto* xc = xcb_get_extension_data(d->connection, &xcb_input_id);
@@ -343,6 +347,11 @@ void X11Worker::initialize()
     }
 
     if (d->randrAvailable && d->screen) {
+        const uint16_t mask = XCB_RANDR_NOTIFY_MASK_SCREEN_CHANGE
+            | XCB_RANDR_NOTIFY_MASK_CRTC_CHANGE
+            | XCB_RANDR_NOTIFY_MASK_OUTPUT_CHANGE
+            | XCB_RANDR_NOTIFY_MASK_OUTPUT_PROPERTY;
+        xcb_randr_select_input(d->connection, d->screen->root, mask);
         d->outputs = queryRandROutputs(d->connection, d->screen->root);
     }
     d->windows = buildWindowList(d->connection, d->screen ? d->screen->root : 0, d->atoms);
@@ -390,17 +399,19 @@ void X11Worker::initialize()
                 if (type == XCB_PROPERTY_NOTIFY || type == XCB_CREATE_NOTIFY || type == XCB_DESTROY_NOTIFY || type == XCB_MAP_NOTIFY || type == XCB_UNMAP_NOTIFY || type == XCB_CONFIGURE_NOTIFY) {
                     refreshWindows();
                 }
+                if (d->randrAvailable
+                    && (type == d->randrFirstEvent + XCB_RANDR_SCREEN_CHANGE_NOTIFY
+                        || type == d->randrFirstEvent + XCB_RANDR_NOTIFY)) {
+                    refreshOutputs();
+                }
                 free(e);
             }
         });
     }
-    d->refreshTimer = new QTimer(this);
-    d->refreshTimer->setInterval(1000);
-    connect(d->refreshTimer, &QTimer::timeout, this, [this] {
-        refreshOutputs();
-        refreshWindows();
-    });
-    d->refreshTimer->start();
+    d->windowRefreshTimer = new QTimer(this);
+    d->windowRefreshTimer->setInterval(1000);
+    connect(d->windowRefreshTimer, &QTimer::timeout, this, &X11Worker::refreshWindows);
+    d->windowRefreshTimer->start();
 }
 
 void X11Worker::refreshOutputs()
@@ -438,10 +449,10 @@ void X11Worker::shutdown()
         delete d->notifier;
         d->notifier = nullptr;
     }
-    if (d->refreshTimer) {
-        d->refreshTimer->stop();
-        delete d->refreshTimer;
-        d->refreshTimer = nullptr;
+    if (d->windowRefreshTimer) {
+        d->windowRefreshTimer->stop();
+        delete d->windowRefreshTimer;
+        d->windowRefreshTimer = nullptr;
     }
     d->capture.reset();
     if (d->connection) {
