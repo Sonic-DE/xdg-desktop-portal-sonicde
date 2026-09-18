@@ -21,6 +21,7 @@ ecm_add_test(inputcapturebarriertest.cpp ${CMAKE_SOURCE_DIR}/src/inputcapturebar
 # Pure unit tests for the X11 replacement components
 set(_x11_unit_tests
     x11capturetest
+    x11workertest
     pipewirestreamtest
     x11inputtest
     xeismountertest
