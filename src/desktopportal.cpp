@@ -41,7 +41,7 @@ bool isSupportedDesktop()
     const QByteArray current = qgetenv("XDG_CURRENT_DESKTOP");
     const QList<QByteArray> tokens = current.split(':');
     for (const QByteArray& token : tokens) {
-        if (token.compare("KDE", Qt::CaseInsensitive) == 0 || token.compare("SONICDE", Qt::CaseInsensitive) == 0) {
+        if (token.compare("KDE", Qt::CaseInsensitive) == 0 || token.compare("SonicDE", Qt::CaseInsensitive) == 0) {
             return true;
         }
     }

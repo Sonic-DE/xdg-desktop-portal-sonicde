@@ -26,7 +26,7 @@ class IsolatedBackendTest(unittest.TestCase):
             directory = os.path.join(temporary.name, variable)
             os.mkdir(directory, 0o700)
             self.environment[variable] = directory
-        self.environment.update(QT_QPA_PLATFORM="xcb", XDG_CURRENT_DESKTOP="SONICDE", KCRASH_AUTO_RESTART="0")
+        self.environment.update(QT_QPA_PLATFORM="xcb", XDG_CURRENT_DESKTOP="SonicDE:KDE", KCRASH_AUTO_RESTART="0")
 
         # No service directories: do not activate host portal helpers or other daemons.
         config_path = os.path.join(temporary.name, "bus.conf")

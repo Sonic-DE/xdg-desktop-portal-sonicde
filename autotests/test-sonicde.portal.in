@@ -1,5 +1,5 @@
 [portal]
-UseIn=KDE;SONICDE
+UseIn=SonicDE;KDE;
 DefaultProvider=org.freedesktop.impl.portal.desktop.sonicde.test
 ```
 

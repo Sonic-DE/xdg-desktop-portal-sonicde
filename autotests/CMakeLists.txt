@@ -163,21 +163,21 @@ target_link_libraries(directbackendclient PRIVATE
 
 add_test(NAME directbackendproducertest COMMAND directbackendclient)
 set_tests_properties(directbackendproducertest PROPERTIES
-    ENVIRONMENT "XDP_SONICDE_TEST_BACKEND=$<TARGET_FILE:xdg-desktop-portal-sonicde-test>;QT_QPA_PLATFORM=xcb;XDG_CURRENT_DESKTOP=SONICDE"
+    ENVIRONMENT "XDP_SONICDE_TEST_BACKEND=$<TARGET_FILE:xdg-desktop-portal-sonicde-test>;QT_QPA_PLATFORM=xcb;XDG_CURRENT_DESKTOP=SonicDE:KDE"
     LABELS "live;direct-producer"
     SKIP_RETURN_CODE 77
 )
 
 add_test(NAME sandboxfrontendtest COMMAND directbackendclient)
 set_tests_properties(sandboxfrontendtest PROPERTIES
-    ENVIRONMENT "XDP_SONICDE_TEST_BACKEND=$<TARGET_FILE:xdg-desktop-portal-sonicde-test>;QT_QPA_PLATFORM=xcb;XDG_CURRENT_DESKTOP=SONICDE"
+    ENVIRONMENT "XDP_SONICDE_TEST_BACKEND=$<TARGET_FILE:xdg-desktop-portal-sonicde-test>;QT_QPA_PLATFORM=xcb;XDG_CURRENT_DESKTOP=SonicDE:KDE"
     LABELS "live;sandbox"
     SKIP_RETURN_CODE 77
 )
 
 add_test(NAME manualchooservalidationtest COMMAND directbackendclient)
 set_tests_properties(manualchooservalidationtest PROPERTIES
-    ENVIRONMENT "XDP_SONICDE_TEST_BACKEND=$<TARGET_FILE:xdg-desktop-portal-sonicde-test>;QT_QPA_PLATFORM=xcb;XDG_CURRENT_DESKTOP=SONICDE"
+    ENVIRONMENT "XDP_SONICDE_TEST_BACKEND=$<TARGET_FILE:xdg-desktop-portal-sonicde-test>;QT_QPA_PLATFORM=xcb;XDG_CURRENT_DESKTOP=SonicDE:KDE"
     LABELS "manual;interactive"
     SKIP_RETURN_CODE 77
 )
