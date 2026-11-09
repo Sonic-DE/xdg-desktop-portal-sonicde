@@ -2,7 +2,7 @@
 
 Gives sandboxed apps (such as Flatpaks) and other programs SonicDE's own file pickers, screen sharing, screenshots and permission prompts.
 
-## Unreleased
+## 6.8.2 (2026-11-10)
 
 - Now presents itself with SonicDE names and identity throughout the desktop.
 
